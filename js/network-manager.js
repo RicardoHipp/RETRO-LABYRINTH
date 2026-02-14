@@ -61,6 +61,12 @@ export class NetworkManager {
         /** @type {function|null} Callback wenn Gegner besiegt wurde */
         this.onBesiegtEmpfangen = null;
 
+        /** @type {function|null} Callback wenn ein Pickup eingesammelt wurde */
+        this.onPickupCollected = null;
+
+        /** @type {function|null} Callback für neue Pickups (Gast) */
+        this.onNewPickup = null;
+
         // Timer für regelmäßige Positions-Updates
         this._positionsTimer = null;
         this._letztePosition = null;
@@ -177,6 +183,18 @@ export class NetworkManager {
                 console.log('[Netzwerk] Gegner wurde besiegt!');
                 if (this.onBesiegtEmpfangen) {
                     this.onBesiegtEmpfangen();
+                }
+                break;
+
+            case 'pickup_collected':
+                if (this.onPickupCollected) {
+                    this.onPickupCollected(nachricht.daten.id);
+                }
+                break;
+
+            case 'new_pickup':
+                if (this.onNewPickup) {
+                    this.onNewPickup(nachricht.daten.id, nachricht.daten.pos);
                 }
                 break;
 
@@ -347,6 +365,14 @@ export class NetworkManager {
     sendHit(zielId, schaden) {
         this.sende('treffer', { schaden: schaden });
         console.log(`[Netzwerk] Treffer gesendet (${schaden} Schaden)`);
+    }
+
+    /**
+     * Sendet eine Nachricht, dass ein Pickup eingesammelt wurde.
+     * @param {string} id - ID des Munitionspacks
+     */
+    sendePickupEingesammelt(id) {
+        this.sende('pickup_collected', { id: id });
     }
 
     /**

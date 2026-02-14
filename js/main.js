@@ -16,13 +16,15 @@
 
 import { generateMaze, buildMazeGeometry, findeFreiePosition, generiereZufallsSeed, WAND_GROESSE } from './maze-generator.js';
 import { initInput, getLookDelta, bewegeSpieler, verbrauchSchuss } from './input-handler.js';
-import { initRenderer, updateKameraRotation, getGierWinkel, updateSpielerLicht, renderFrame, getKamera, getScene, getRenderer, AUGEN_HOEHE } from './renderer.js';
-import { initCombat, schiessen, updateCombat, registriereZiel, entferneZiel, empfangeSchaden, updateLebenAnzeige, resetLeben, SCHADEN_PRO_TREFFER } from './combat.js';
+import { initRenderer, updateKameraRotation, getGierWinkel, updateSpielerLicht, renderFrame, getKamera, getScene, getRenderer, AUGEN_HOEHE, erzeugeMunitionModel, entfernePickupModel } from './renderer.js';
+import { initCombat, schiessen, updateCombat, registriereZiel, entferneZiel, entferneAlleZiele, empfangeSchaden, updateLebenAnzeige, resetLeben, addMunition, updateMunitionAnzeige, resetMunition, getMunition, MAX_MUNITION } from './combat.js';
 import { NetworkManager } from './network-manager.js';
 
 // ── Spiel-Einstellungen ─────────────────────────────────────
 const LABYRINTH_BREITE = 8;   // Zellen (Gesamtraster wird 2*8+1 = 17)
 const LABYRINTH_HOEHE = 8;
+const MAX_PICKUPS_ON_GROUND = 8; // Maximal 8 Munitionspacks (40 Schuss) auf dem Boden
+const RESPAWN_INTERVAL = 5;      // Alle 5 Sekunden prüfen
 
 // ── Globaler Spielzustand ───────────────────────────────────
 let labyrinth = null;
@@ -31,7 +33,15 @@ let gegnerMesh = null;
 let uhr = null; // THREE.Clock für DeltaZeit
 let spielGestartet = false;
 let spielSeed = 0;
+let letzterRespawnZeit = 0;
 let rundeAktiv = true; // false wenn jemand besiegt wurde
+let munitionPickups = []; // Liste der verfügbaren Munitionspacks
+let neustartTimer = null; // Globaler Timer für Neustart-Countdown
+
+// Radar-Ping System (Gegner auf Minimap)
+let gegnerRadarPos = null;      // Die zuletzt "gepinnte" Position
+let letzterRadarPingZeit = 0;   // Zeit des letzten Pings
+const RADAR_INTERVALL = 5.0;    // Alle 5 Sekunden ein Update
 
 // ── Minimap ─────────────────────────────────────────────────
 let minimapCanvas = null;
@@ -60,15 +70,29 @@ function starteSpielMitSeed(seed, istHost) {
     const scene = getScene();
     const kamera = getKamera();
 
+    // Alte Pickups aufräumen
+    for (let p of munitionPickups) {
+        scene.remove(p.model);
+        entfernePickupModel(p.model);
+    }
+    munitionPickups = [];
+
     // Labyrinth generieren (gleicher Seed = gleiches Labyrinth)
     labyrinth = generateMaze(LABYRINTH_BREITE, LABYRINTH_HOEHE, seed);
     buildMazeGeometry(scene, labyrinth);
+
+    // Munition spawnen
+    spawnMunitionPacks(seed);
 
     // Spieler spawnen – Host an Position 0, Guest an Position weit entfernt
     const spawnIndex = istHost ? 0 : Math.floor(LABYRINTH_BREITE * LABYRINTH_HOEHE * 0.8);
     const spawnPos = findeFreiePosition(labyrinth, spawnIndex);
     kamera.position.set(spawnPos.x, AUGEN_HOEHE, spawnPos.z);
     console.log(`[Spiel] Spieler gespawnt bei: (${spawnPos.x.toFixed(1)}, ${spawnPos.z.toFixed(1)})`);
+
+    // Munition zurücksetzen
+    resetMunition();
+    updateMunitionAnzeige();
 
     // Minimap initialisieren
     initMinimap();
@@ -81,10 +105,8 @@ function starteSpielMitSeed(seed, istHost) {
         document.getElementById('touch-controls').style.display = 'block';
     }
 
-    // PointerLock auf Desktop
-    if (!istMobileGeraet()) {
-        getRenderer().domElement.requestPointerLock();
-    }
+    // Hinweis: PointerLock wird erst durch User-Interaktion (Klick) aktiviert
+    // um WrongDocumentError zu vermeiden.
 
     // Positions-Updates starten
     netzwerk.startePositionsUpdates();
@@ -105,14 +127,19 @@ function erstelleGegnerMesh() {
 
     // Körper (rot)
     const koerperGeometrie = new THREE.BoxGeometry(0.6, 1.6, 0.4);
+    koerperGeometrie.translate(0, 0.8, 0); // Ursprung an die Füße verschieben
     const koerperMaterial = new THREE.MeshLambertMaterial({ color: 0xff3333 });
-    gegnerMesh = new THREE.Mesh(koerperGeometrie, koerperMaterial);
+    const koerper = new THREE.Mesh(koerperGeometrie, koerperMaterial);
+    koerper.name = 'body'; // Für Treffererkennung
+    gegnerMesh = new THREE.Group(); // Verwende Group statt Mesh für komplexe Ziele
+    gegnerMesh.add(koerper);
 
     // Kopf
     const kopfGeometrie = new THREE.BoxGeometry(0.4, 0.4, 0.4);
     const kopfMaterial = new THREE.MeshLambertMaterial({ color: 0xffcc88 });
     const kopf = new THREE.Mesh(kopfGeometrie, kopfMaterial);
-    kopf.position.y = 1.0;
+    kopf.name = 'head'; // Für Headshots (doppelter Schaden)
+    kopf.position.y = 1.8; // Kopf oben auf den Körper setzen
     gegnerMesh.add(kopf);
 
     // Startposition (wird durch Netzwerk sofort überschrieben)
@@ -120,10 +147,129 @@ function erstelleGegnerMesh() {
     gegnerMesh.visible = false; // Erst sichtbar wenn Position empfangen
 
     // Als Ziel für Raycasting registrieren
-    registriereZiel(gegnerMesh, 'gegner');
+    gegnerMesh.userData.spielerId = 'gegner'; // Wichtig für Trefferauswertung!
+    registriereZiel(gegnerMesh);
     scene.add(gegnerMesh);
 
     console.log('[Spiel] Gegner-Mesh erstellt');
+}
+
+/**
+ * Spawnt Munitionspacks im Labyrinth basierend auf dem Seed.
+ * @param {number} seed 
+ */
+function spawnMunitionPacks(seed) {
+    // Einfacher Zufallsgenerator basierend auf Seed
+    let random = seed;
+    const seededRandom = () => {
+        random = (random * 16807) % 2147483647;
+        return (random - 1) / 2147483646;
+    };
+
+    const anzahl = 6; // Starten mit 6 Packs
+    for (let i = 0; i < anzahl; i++) {
+        spawnEinzelnesPickup(seededRandom);
+    }
+    console.log(`[Spiel] ${anzahl} Munitionspacks zum Start gespawnt`);
+}
+
+/**
+ * Spawnt ein einzelnes Munitionspack an einer zufälligen freien Stelle.
+ * @param {function} randomFunc - Optionale Zufallsfunktion
+ */
+function spawnEinzelnesPickup(randomFunc = Math.random) {
+    const scene = getScene();
+    if (!scene) return null;
+
+    const randIdx = Math.floor(randomFunc() * LABYRINTH_BREITE * LABYRINTH_HOEHE);
+    const pos = findeFreiePosition(labyrinth, randIdx);
+
+    // Eindeutige ID generieren
+    const id = `ammo_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    const model = erzeugeMunitionModel();
+    model.position.set(pos.x, 0.5, pos.z);
+    scene.add(model);
+
+    munitionPickups.push({
+        id: id,
+        pos: pos,
+        model: model
+    });
+
+    // Wenn Host: Gast informieren
+    if (netzwerk && netzwerk.istHost && netzwerk.verbunden) {
+        netzwerk.sende('new_pickup', { id, pos });
+    }
+
+    return id;
+}
+
+/**
+ * Spawnt ein Pickup an einer im Netzwerk empfangenen Position (nur Gast).
+ * @param {string} id 
+ * @param {object} pos 
+ */
+export function spawnNetzwerkPickup(id, pos) {
+    const scene = getScene();
+    if (!scene) return;
+
+    const model = erzeugeMunitionModel();
+    model.position.set(pos.x, 0.5, pos.z);
+    scene.add(model);
+
+    munitionPickups.push({
+        id: id,
+        pos: pos,
+        model: model
+    });
+    console.log(`[Netzwerk] Neues Munitionspack empfangen: ${id}`);
+}
+
+/**
+ * Prüft auf Kollisionen mit Munitionspacks.
+ */
+function updatePickups() {
+    if (!spielGestartet || !rundeAktiv) return;
+
+    const kamera = getKamera();
+    const spielerPos = kamera.position;
+
+    for (let i = munitionPickups.length - 1; i >= 0; i--) {
+        const p = munitionPickups[i];
+        const dx = spielerPos.x - p.pos.x;
+        const dz = spielerPos.z - p.pos.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+
+        // Einsammel-Radius: 0.6 Einheiten
+        if (dist < 0.6) {
+            // Nur einsammeln, wenn das Limit (20) noch nicht erreicht ist
+            if (getMunition() < MAX_MUNITION) {
+                console.log(`[Spiel] Munition eingesammelt: ${p.id}`);
+                addMunition(5); // +5 Schuss
+
+                // Vom Netzwerk benachrichtigen
+                netzwerk.sende('pickup_collected', { id: p.id });
+
+                entfernePickup(p.id);
+            }
+        }
+    }
+}
+
+/**
+ * Entfernt ein Munitionspack aus der Szene.
+ * @param {string} id 
+ */
+export function entfernePickup(id) {
+    const idx = munitionPickups.findIndex(p => p.id === id);
+    if (idx !== -1) {
+        const p = munitionPickups[idx];
+        const scene = getScene();
+        if (scene) scene.remove(p.model);
+        entfernePickupModel(p.model);
+        munitionPickups.splice(idx, 1);
+    }
 }
 
 /**
@@ -173,8 +319,16 @@ function initLobby() {
             startScreen.style.display = 'none';
             lobbyScreen.style.display = 'none';
 
-            // Netzwerk-Initialisierung täuschen
+            // Netzwerk-Initialisierung täuschen für Solo-Modus
             netzwerk.istHost = true;
+            netzwerk.verbunden = false;
+            // Dummy-Funktionen um Abstürze zu vermeiden
+            netzwerk.sende = () => { };
+            netzwerk.sendHit = () => { };
+            netzwerk.sendPlayerPosition = () => { };
+            netzwerk.startePositionsUpdates = () => { };
+            netzwerk.sendeSeed = () => { };
+
             spielSeed = generiereZufallsSeed();
 
             // Szene initialisieren
@@ -324,9 +478,27 @@ function richteNetzwerkCallbacks() {
         }
     });
 
-    // Gegner wurde besiegt → Ich habe gewonnen!
     netzwerk.onBesiegtEmpfangen = () => {
         zeigeErgebnis('SIEG', '🏆 Du hast gewonnen!');
+    };
+
+    // Munition-Pickup Synchronisation
+    netzwerk.onPickupCollected = (pickupId) => {
+        console.log(`[Netzwerk] Pickup eingesammelt durch Gegner: ${pickupId}`);
+        entfernePickup(pickupId);
+    };
+
+    // Neue Munitionspacks empfangen (nur Gast)
+    netzwerk.onNewPickup = (id, pos) => {
+        spawnNetzwerkPickup(id, pos);
+    };
+
+    // WICHTIG: Neuen Seed für Runden-Neustart empfangen (nur Gast)
+    netzwerk.onSeedEmpfangen = (seed) => {
+        console.log('[Netzwerk] Neuer Seed empfangen, starte neue Runde!');
+        stoppeNeustartTimer();
+        spielSeed = seed;
+        starteNeueRunde();
     };
 }
 
@@ -351,11 +523,14 @@ function zeigeErgebnis(titel, nachricht) {
         // Countdown für Neustart
         let countdown = 4;
         countdownEl.textContent = `Neue Runde in ${countdown}...`;
-        const timer = setInterval(() => {
+
+        if (neustartTimer) clearInterval(neustartTimer);
+
+        neustartTimer = setInterval(() => {
             countdown--;
             countdownEl.textContent = `Neue Runde in ${countdown}...`;
             if (countdown <= 0) {
-                clearInterval(timer);
+                stoppeNeustartTimer();
                 starteNeueRunde();
             }
         }, 1000);
@@ -363,53 +538,59 @@ function zeigeErgebnis(titel, nachricht) {
 }
 
 /**
+ * Stoppt den Neustart-Countdown und blendet das Overlay aus.
+ */
+function stoppeNeustartTimer() {
+    if (neustartTimer) {
+        clearInterval(neustartTimer);
+        neustartTimer = null;
+    }
+    const overlay = document.getElementById('ergebnis-overlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+/**
  * Startet eine neue Runde mit neuem Labyrinth.
  */
 function starteNeueRunde() {
-    // Overlay ausblenden
-    const overlay = document.getElementById('ergebnis-overlay');
-    if (overlay) overlay.style.display = 'none';
+    // Overlay & Timer stoppen
+    stoppeNeustartTimer();
 
-    // Altes Labyrinth aus Scene entfernen
-    const scene = getScene();
-    const kamera = getKamera();
-    const zuEntfernen = [];
-    scene.traverse((obj) => {
-        if (obj.isMesh && obj !== gegnerMesh && !gegnerMesh?.children.includes(obj)) {
-            zuEntfernen.push(obj);
-        }
-    });
-    zuEntfernen.forEach(obj => {
-        scene.remove(obj);
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) obj.material.dispose();
-    });
+    // Renderer/Szene zurücksetzen (Singleton kümmert sich um Cleanup)
+    const { scene, kamera } = initRenderer();
 
-    // Leben zurücksetzen
+    // Kampf-Ziele resetten
+    entferneAlleZiele();
+
+    // Gegner-Mesh wiederherstellen
+    if (gegnerMesh) {
+        scene.add(gegnerMesh);
+        gegnerMesh.visible = false;
+        // Wichtig: Gegner wieder als Ziel registrieren!
+        registriereZiel(gegnerMesh);
+    }
+
+    // Leben & Munition zurücksetzen
     resetLeben();
+    resetMunition();
+    updateMunitionAnzeige();
+
+    // Radar-Zustand resetten
+    gegnerRadarPos = null;
+    letzterRadarPingZeit = 0;
+
     rundeAktiv = true;
 
     // Neuen Seed generieren (Host) oder empfangen (Guest)
+    // Host generiert neuen Seed und verteilt ihn
     if (netzwerk.istHost) {
         spielSeed = generiereZufallsSeed();
+        console.log('[Spiel] Host generiert neuen Seed:', spielSeed);
         netzwerk.sendeSeed(spielSeed);
-        // Labyrinth neu aufbauen
-        labyrinth = generateMaze(LABYRINTH_BREITE, LABYRINTH_HOEHE, spielSeed);
-        buildMazeGeometry(scene, labyrinth);
-        const spawnPos = findeFreiePosition(labyrinth, 0);
-        kamera.position.set(spawnPos.x, AUGEN_HOEHE, spawnPos.z);
-        initMinimap();
     }
 
-    // Guest: Seed-Callback für neues Labyrinth
-    netzwerk.onSeedEmpfangen = (seed) => {
-        spielSeed = seed;
-        labyrinth = generateMaze(LABYRINTH_BREITE, LABYRINTH_HOEHE, seed);
-        buildMazeGeometry(scene, labyrinth);
-        const spawnPos = findeFreiePosition(labyrinth, Math.floor(LABYRINTH_BREITE * LABYRINTH_HOEHE * 0.8));
-        kamera.position.set(spawnPos.x, AUGEN_HOEHE, spawnPos.z);
-        initMinimap();
-    };
+    // WICHTIG: Beide bauen das Labyrinth mit dem (neuen) spielSeed auf
+    starteSpielMitSeed(spielSeed, netzwerk.istHost);
 
     console.log('[Spiel] 🔄 Neue Runde gestartet!');
 }
@@ -442,19 +623,36 @@ function gameLoop() {
     // ── 2. Spieler bewegen (mit Kollision) ──────────────────
     bewegeSpieler(kamera, deltaZeit, getGierWinkel(), labyrinth);
 
+    // ── Pickups prüfen ──────────────────────────────────────
+    updatePickups();
+
     // ── 3. Schuss prüfen ────────────────────────────────────
     if (rundeAktiv && verbrauchSchuss()) {
         const ergebnis = schiessen(kamera, scene, aktuelleZeit);
         if (ergebnis.treffer) {
-            netzwerk.sendHit(ergebnis.spielerId, SCHADEN_PRO_TREFFER);
+            // Schaden senden, den wir in combat.js berechnet haben (Headshot-Support)
+            netzwerk.sendHit(ergebnis.spielerId, ergebnis.schaden);
         }
     }
 
     // ── 4. Kampf-System aktualisieren ───────────────────────
     updateCombat(deltaZeit, kamera);
 
+    // ── Munition Respawn (nur Host) ──────────────────────────
+    if (netzwerk.istHost && rundeAktiv) {
+        if (aktuelleZeit - letzterRespawnZeit > RESPAWN_INTERVAL) {
+            letzterRespawnZeit = aktuelleZeit;
+            if (munitionPickups.length < MAX_PICKUPS_ON_GROUND) {
+                spawnEinzelnesPickup();
+                console.log('[Spiel] Munition-Respawn getriggert');
+            }
+        }
+    }
+
     // ── 5. Netzwerk: Position senden ────────────────────────
-    netzwerk.sendPlayerPosition(kamera.position, kamera.rotation);
+    // Wir senden die Bodenposition (Y=0), nicht die Kamerahöhe!
+    const bodenPos = new THREE.Vector3(kamera.position.x, 0, kamera.position.z);
+    netzwerk.sendPlayerPosition(bodenPos, kamera.rotation);
 
     // ── 6. Spieler-Licht aktualisieren ──────────────────────
     updateSpielerLicht();
@@ -509,14 +707,56 @@ function zeichneMinimap(kamera) {
     ctx.lineTo((sX - Math.sin(gier) * 2) * z, (sZ - Math.cos(gier) * 2) * z);
     ctx.stroke();
 
-    // Gegner (rot)
+    // Gegner (rot, Radar-Ping System)
     if (gegnerMesh && gegnerMesh.visible) {
-        const gX = (gegnerMesh.position.x / WAND_GROESSE + 0.5);
-        const gZ = (gegnerMesh.position.z / WAND_GROESSE + 0.5);
+        // Zeit prüfen für neuen Ping
+        const aktuelleZeit = performance.now() / 1000;
+        if (!gegnerRadarPos || aktuelleZeit - letzterRadarPingZeit >= RADAR_INTERVALL) {
+            gegnerRadarPos = {
+                x: gegnerMesh.position.x,
+                z: gegnerMesh.position.z
+            };
+            letzterRadarPingZeit = aktuelleZeit;
+            console.log('[Radar] 📡 Ping! Gegnerposition aktualisiert.');
+        }
+
+        // Radar-Punkt zeichnen
+        const gX = (gegnerRadarPos.x / WAND_GROESSE + 0.5);
+        const gZ = (gegnerRadarPos.z / WAND_GROESSE + 0.5);
+
         ctx.fillStyle = '#ff4444';
         ctx.beginPath();
         ctx.arc(gX * z, gZ * z, 3, 0, Math.PI * 2);
         ctx.fill();
+
+        // Visueller Ping-Effekt (Aufleuchten direkt nach Update)
+        const zeitSeitPing = aktuelleZeit - letzterRadarPingZeit;
+        const PING_EFFEKT_DAUER = 1.5; // Wie lange es leuchtet
+
+        if (zeitSeitPing < PING_EFFEKT_DAUER) {
+            const fortschritt = zeitSeitPing / PING_EFFEKT_DAUER;
+            const radius = 3 + fortschritt * 12; // Ring wird größer
+            const opacity = 1.0 - fortschritt;    // Ring verblasst
+
+            ctx.strokeStyle = `rgba(255, 68, 68, ${opacity})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(gX * z, gZ * z, radius, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Zusätzlicher Blitz/Leuchten des Kerns
+            ctx.fillStyle = `rgba(255, 200, 200, ${opacity * 0.5})`;
+            ctx.beginPath();
+            ctx.arc(gX * z, gZ * z, 5, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+            // Normaler feiner Ring im statischen Zustand
+            ctx.strokeStyle = 'rgba(255, 68, 68, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(gX * z, gZ * z, 5, 0, Math.PI * 2);
+            ctx.stroke();
+        }
     }
 }
 

@@ -16,7 +16,9 @@ const SCHUSS_REICHWEITE = 50;   // Maximale Trefferdistanz
 const MUZZLE_FLASH_DAUER = 0.08; // Dauer des Mündungsfeuers in Sekunden
 const STRAHL_DAUER = 0.15;       // Dauer des Laserstrahls in Sekunden
 const MAX_LEBEN = 100;           // Maximale Lebenspunkte
-const SCHADEN_PRO_TREFFER = 25;  // Schaden pro Treffer
+export const SCHADEN_KOERPER = 15; // Schaden bei Körpertreffer
+export const SCHADEN_KOPF = 30;   // Schaden bei Headshot
+export const MAX_MUNITION = 20;         // Maximal 20 Schuss pro Spieler
 
 // ── Zustand ─────────────────────────────────────────────────
 let letzterSchussZeit = 0;
@@ -24,6 +26,7 @@ let muzzleFlashAktiv = false;
 let muzzleFlashTimer = 0;
 let muzzleFlashLicht = null;
 let leben = MAX_LEBEN;
+let munition = 10;
 
 // Laserstrahl-Zustand
 let aktuellerStrahl = null;      // Aktuelles THREE.Line Objekt
@@ -100,6 +103,33 @@ function spieleSchussSound() {
 }
 
 /**
+ * Erzeugt einen prozeduralen Sound für das Einsammeln von Munition.
+ * Aufsteigender "Pling"-Sound (200Hz → 800Hz).
+ */
+function spielePickupSound() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    const zeit = audioCtx.currentTime;
+    const osz = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osz.type = 'triangle'; // Weicherer Sound als Sägezahn
+    osz.frequency.setValueAtTime(400, zeit);
+    osz.frequency.exponentialRampToValueAtTime(1200, zeit + 0.1);
+
+    gain.gain.setValueAtTime(0.2, zeit);
+    gain.gain.exponentialRampToValueAtTime(0.01, zeit + 0.1);
+
+    osz.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osz.start(zeit);
+    osz.stop(zeit + 0.1);
+}
+
+/**
  * Initialisiert das Kampfsystem.
  * @param {THREE.Scene} scene - Die Spielszene
  * @param {THREE.Camera} kamera - Die Spieler-Kamera
@@ -110,31 +140,8 @@ export function initCombat(scene, kamera) {
     muzzleFlashLicht.position.copy(kamera.position);
     scene.add(muzzleFlashLicht);
 
+    updateMunitionAnzeige();
     console.log('[Kampf] Kampfsystem initialisiert');
-}
-
-/**
- * Registriert ein Mesh als treffbares Ziel.
- * @param {THREE.Mesh} mesh - Das Gegner-Mesh
- * @param {string} spielerId - ID des Gegners
- */
-export function registriereZiel(mesh, spielerId) {
-    mesh.userData.spielerId = spielerId;
-    mesh.userData.istGegner = true;
-    ziele.push(mesh);
-    console.log(`[Kampf] Ziel registriert: ${spielerId}`);
-}
-
-/**
- * Entfernt ein Ziel aus der Liste.
- * @param {string} spielerId - ID des zu entfernenden Gegners
- */
-export function entferneZiel(spielerId) {
-    const index = ziele.findIndex(z => z.userData.spielerId === spielerId);
-    if (index !== -1) {
-        ziele.splice(index, 1);
-        console.log(`[Kampf] Ziel entfernt: ${spielerId}`);
-    }
 }
 
 /**
@@ -149,10 +156,18 @@ export function entferneZiel(spielerId) {
 export function schiessen(kamera, scene, aktuelleZeit) {
     // Cooldown prüfen
     if (aktuelleZeit - letzterSchussZeit < SCHUSS_COOLDOWN) {
-        return { treffer: false, spielerId: null, punkt: null };
+        return { treffer: false, spielerId: null, punkt: null, erfolg: false };
     }
 
+    // Munition prüfen
+    if (munition <= 0) {
+        console.log('[Kampf] Keine Munition!');
+        return { treffer: false, spielerId: null, punkt: null, erfolg: false };
+    }
+
+    munition--;
     letzterSchussZeit = aktuelleZeit;
+    updateMunitionAnzeige();
 
     // Schuss-Sound abspielen
     spieleSchussSound();
@@ -177,24 +192,34 @@ export function schiessen(kamera, scene, aktuelleZeit) {
         setTimeout(() => { flashElement.style.opacity = '0'; }, 80);
     }
 
-    // Raycast von Bildschirmmitte nach vorn
+    // Raycast von Bildschirmmitte nach vorn (rekursiv für Headshots)
     raycaster.setFromCamera(new THREE.Vector2(0, 0), kamera);
-    const treffer = raycaster.intersectObjects(ziele, false);
+    console.log(`[Kampf] Schuss von ${kamera.position.x.toFixed(1)}, ${kamera.position.z.toFixed(1)} | Ziele in Liste: ${ziele.length}`);
+
+    // Debug: Ziele prüfen
+    ziele.forEach(z => {
+        console.log(` - Ziel: ${z.name || 'Unnamed'}, Sichtbar: ${z.visible}, Pos: ${z.position.x.toFixed(1)}, ${z.position.z.toFixed(1)}`);
+    });
+
+    const trefferPoints = raycaster.intersectObjects(ziele, true);
 
     // Endpunkt des Strahls bestimmen (Wand oder max. Reichweite)
-    wandRaycaster.setFromCamera(new THREE.Vector2(0, 0), kamera);
-    const alleTreffer = wandRaycaster.intersectObjects(scene.children, true);
+    const wandRaycaster = new THREE.Raycaster();
+    wandRaycaster.ray.origin.copy(kamera.position);
+    wandRaycaster.ray.direction.copy(raycaster.ray.direction);
+    wandRaycaster.near = 0.1;
+    wandRaycaster.far = SCHUSS_REICHWEITE;
+    const alleWandTreffer = wandRaycaster.intersectObjects(scene.children, true);
 
     // Startpunkt: leicht vor der Kamera
     const strahlStart = kamera.position.clone();
-    const richtung = new THREE.Vector3();
-    kamera.getWorldDirection(richtung);
-    strahlStart.add(richtung.clone().multiplyScalar(0.3)); // Leicht vor der Kamera
+    const richtung = raycaster.ray.direction.clone();
+    strahlStart.add(richtung.clone().multiplyScalar(0.3));
 
-    // Endpunkt: erster Treffer oder maximale Reichweite
+    // Endpunkt: erster Wandtreffer oder maximale Reichweite
     let strahlEnde;
-    if (alleTreffer.length > 0) {
-        strahlEnde = alleTreffer[0].point.clone();
+    if (alleWandTreffer.length > 0) {
+        strahlEnde = alleWandTreffer[0].point.clone();
     } else {
         strahlEnde = strahlStart.clone().add(richtung.multiplyScalar(SCHUSS_REICHWEITE));
     }
@@ -202,25 +227,82 @@ export function schiessen(kamera, scene, aktuelleZeit) {
     // Laserstrahl erzeugen
     erzeugeStrahl(scene, strahlStart, strahlEnde);
 
-    // Einschlag am Endpunkt erzeugen
-    if (alleTreffer.length > 0) {
-        erzeugeEinschlag(scene, alleTreffer[0].point);
+    // Einschlag am Endpunkt (Wand) erzeugen
+    if (alleWandTreffer.length > 0) {
+        erzeugeEinschlag(scene, alleWandTreffer[0].point);
     }
 
-    if (treffer.length > 0) {
-        const erstesZiel = treffer[0];
-        const spielerId = erstesZiel.object.userData.spielerId;
-        console.log(`[Kampf] TREFFER! Spieler: ${spielerId}, Distanz: ${erstesZiel.distance.toFixed(1)}m`);
+    // Trefferauswertung (Spieler)
+    if (trefferPoints.length > 0) {
+        const hit = trefferPoints[0];
+        console.log(`[Kampf] Raycast-Treffer auf Objekt: ${hit.object.name}, Distanz: ${hit.distance.toFixed(2)}`);
 
-        return {
-            treffer: true,
-            spielerId: spielerId,
-            punkt: erstesZiel.point
-        };
+        // Nur zählen, wenn der Spieler-Treffer näher oder gleich weit wie die Wand ist
+        if (alleWandTreffer.length === 0 || hit.distance <= alleWandTreffer[0].distance) {
+            const targetObj = hit.object;
+
+            // Suche ID und Zone
+            let spielerId = null;
+            let schaden = SCHADEN_KOERPER;
+            let headshot = false;
+
+            let checker = targetObj;
+            while (checker) {
+                if (checker.userData && checker.userData.spielerId) {
+                    spielerId = checker.userData.spielerId;
+                }
+                if (checker.name === 'head') {
+                    schaden = SCHADEN_KOPF;
+                    headshot = true;
+                }
+                checker = checker.parent;
+            }
+
+            if (spielerId) {
+                console.log(`[Kampf] TREFFER! Zone: ${headshot ? 'KOPF' : 'Körper'} | ID: ${spielerId}`);
+                return {
+                    treffer: true,
+                    spielerId: spielerId,
+                    punkt: hit.point,
+                    schaden: schaden,
+                    headshot: headshot
+                };
+            }
+        }
     }
 
     console.log('[Kampf] Kein Treffer');
     return { treffer: false, spielerId: null, punkt: null };
+}
+
+/**
+ * Registriert ein Objekt als treffbares Ziel.
+ * @param {THREE.Object3D} objekt - Das Ziel-Objekt
+ */
+export function registriereZiel(objekt) {
+    if (!ziele.includes(objekt)) {
+        ziele.push(objekt);
+        console.log('[Kampf] Ziel registriert:', objekt.name || 'Unnamed');
+    }
+}
+
+/**
+ * Entfernt ein spezifisches Ziel (z.B. bei Spieler-Disconnect).
+ */
+export function entferneZiel(objekt) {
+    const index = ziele.indexOf(objekt);
+    if (index !== -1) {
+        ziele.splice(index, 1);
+        console.log('[Kampf] Ziel entfernt');
+    }
+}
+
+/**
+ * Entfernt alle registrierten Ziele (für Rundenwechsel).
+ */
+export function entferneAlleZiele() {
+    ziele.length = 0;
+    console.log('[Kampf] Alle Ziele entfernt');
 }
 
 /**
@@ -385,4 +467,41 @@ export function getLeben() {
     return leben;
 }
 
-export { SCHADEN_PRO_TREFFER };
+/**
+ * Aktualisiert die Munitions-Anzeige im HUD.
+ */
+export function updateMunitionAnzeige() {
+    const ammoElement = document.getElementById('ammo-wert');
+    if (ammoElement) {
+        ammoElement.textContent = munition;
+    }
+}
+
+/**
+ * Gibt die aktuelle Munition zurück.
+ * @returns {number}
+ */
+export function getMunition() {
+    return munition;
+}
+
+/**
+ * Erhöht die Munition (z.B. Pickup).
+ * @param {number} menge - Anzahl der Schüsse
+ * @param {boolean} mitSound - Ob der Pickup-Sound abgespielt werden soll
+ */
+export function addMunition(menge, mitSound = true) {
+    munition = Math.min(MAX_MUNITION, munition + menge);
+    updateMunitionAnzeige();
+    if (mitSound) spielePickupSound();
+}
+
+/**
+ * Setzt Munition zurück (z.B. bei Respawn).
+ */
+export function resetMunition() {
+    munition = 10;
+    updateMunitionAnzeige();
+}
+
+// Ende der Datei

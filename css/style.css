@@ -448,7 +448,15 @@ body {
 }
 
 .status-container .label {
-    color: #aaa;
+    color: #00ffff;
+    text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);
+}
+
+#ammo-wert {
+    color: #00ffff;
+    text-shadow: 0 0 8px rgba(0, 255, 255, 0.8);
+    min-width: 1.5rem;
+    text-align: center;
 }
 
 /* ══════════════════════════════════════════════════════════
