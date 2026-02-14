@@ -1,0 +1,774 @@
+/* ============================================================
+ * SPIELSTIL (style.css)
+ * ============================================================
+ * Retro-Shooter Design mit Glassmorphism-Elementen.
+ * Responsive für Desktop und Mobile.
+ * ============================================================ */
+
+/* ── Import Retro-Font ───────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;600;700&display=swap');
+
+/* ── Grundlegendes Reset ─────────────────────────────────── */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: 'Inter', sans-serif;
+    color: #fff;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+}
+
+/* ── Spiel-Container ─────────────────────────────────────── */
+#game-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+
+#game-container canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   STARTBILDSCHIRM
+   ══════════════════════════════════════════════════════════ */
+#start-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: radial-gradient(ellipse at center, #1a1a2e 0%, #0a0a15 70%);
+}
+
+#start-screen h1 {
+    font-family: 'Press Start 2P', monospace;
+    font-size: clamp(1.2rem, 4vw, 2.5rem);
+    color: #ff4444;
+    text-shadow:
+        0 0 10px rgba(255, 68, 68, 0.8),
+        0 0 30px rgba(255, 68, 68, 0.4),
+        4px 4px 0 #000;
+    margin-bottom: 1rem;
+    text-align: center;
+    animation: pulsieren 2s ease-in-out infinite;
+}
+
+#start-screen .untertitel {
+    font-family: 'Press Start 2P', monospace;
+    font-size: clamp(0.5rem, 1.5vw, 0.8rem);
+    color: #aaa;
+    margin-bottom: 3rem;
+    letter-spacing: 2px;
+}
+
+@keyframes pulsieren {
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.85;
+        transform: scale(1.03);
+    }
+}
+
+#start-button {
+    font-family: 'Press Start 2P', monospace;
+    font-size: clamp(0.7rem, 2vw, 1rem);
+    padding: 1rem 2.5rem;
+    background: linear-gradient(180deg, #ff5555 0%, #cc2222 100%);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    box-shadow:
+        0 4px 0 #991111,
+        0 6px 20px rgba(255, 68, 68, 0.3);
+    transition: all 0.1s;
+}
+
+#start-button:hover {
+    transform: translateY(-2px);
+    box-shadow:
+        0 6px 0 #991111,
+        0 8px 25px rgba(255, 68, 68, 0.4);
+}
+
+#start-button:active {
+    transform: translateY(2px);
+    box-shadow:
+        0 2px 0 #991111,
+        0 3px 10px rgba(255, 68, 68, 0.2);
+}
+
+.steuerung-info {
+    margin-top: 2.5rem;
+    text-align: center;
+    font-size: clamp(0.5rem, 1.2vw, 0.7rem);
+    color: #666;
+    font-family: 'Press Start 2P', monospace;
+    line-height: 2;
+}
+
+.steuerung-info span {
+    color: #ffaa44;
+}
+
+/* Solo-Test Button */
+.solo-btn {
+    margin-top: 1rem;
+    font-family: 'Press Start 2P', monospace;
+    font-size: clamp(0.5rem, 1.2vw, 0.7rem);
+    padding: 0.8rem 1.5rem;
+    background: linear-gradient(180deg, #ffaa00 0%, #cc8800 100%);
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    box-shadow:
+        0 3px 0 #775500,
+        0 5px 15px rgba(255, 170, 0, 0.2);
+    transition: all 0.1s;
+    opacity: 0.8;
+}
+
+.solo-btn:hover {
+    opacity: 1;
+    transform: translateY(-2px);
+    box-shadow:
+        0 5px 0 #775500,
+        0 7px 20px rgba(255, 170, 0, 0.3);
+}
+
+.solo-btn:active {
+    transform: translateY(2px);
+    box-shadow:
+        0 1px 0 #775500,
+        0 2px 5px rgba(255, 170, 0, 0.1);
+}
+
+/* ══════════════════════════════════════════════════════════
+   LOBBY-SCREEN
+   ══════════════════════════════════════════════════════════ */
+#lobby-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 100;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: radial-gradient(ellipse at center, #1a1a2e 0%, #0a0a15 70%);
+    padding: 1rem;
+}
+
+#lobby-screen h2 {
+    font-family: 'Press Start 2P', monospace;
+    font-size: clamp(0.9rem, 3vw, 1.5rem);
+    color: #ff8844;
+    text-shadow: 0 0 10px rgba(255, 136, 68, 0.6), 3px 3px 0 #000;
+    margin-bottom: 2rem;
+    text-align: center;
+}
+
+.lobby-optionen {
+    display: flex;
+    flex-direction: row;
+    gap: 2rem;
+    align-items: stretch;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.lobby-karte {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 2rem;
+    width: 280px;
+    text-align: center;
+}
+
+.lobby-karte h3 {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 0.7rem;
+    color: #ddd;
+    margin-bottom: 1rem;
+}
+
+.lobby-karte p {
+    font-size: 0.8rem;
+    color: #888;
+    margin-bottom: 1.5rem;
+    line-height: 1.5;
+}
+
+.lobby-btn {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 0.6rem;
+    padding: 0.8rem 1.5rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: all 0.15s;
+    color: #fff;
+    width: 100%;
+}
+
+.lobby-btn.erstellen {
+    background: linear-gradient(180deg, #44aa44 0%, #228822 100%);
+    box-shadow: 0 3px 0 #116611, 0 4px 15px rgba(68, 170, 68, 0.3);
+}
+
+.lobby-btn.erstellen:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 0 #116611, 0 6px 20px rgba(68, 170, 68, 0.4);
+}
+
+.lobby-btn.beitreten {
+    background: linear-gradient(180deg, #4488ff 0%, #2255cc 100%);
+    box-shadow: 0 3px 0 #113399, 0 4px 15px rgba(68, 136, 255, 0.3);
+    width: auto;
+    padding: 0.8rem 1.2rem;
+}
+
+.lobby-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none !important;
+}
+
+.lobby-trenner {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 0.6rem;
+    color: #555;
+    display: flex;
+    align-items: center;
+    padding: 0 0.5rem;
+}
+
+/* Code-Anzeige */
+#raum-code-anzeige {
+    margin-top: 1.5rem;
+}
+
+.code-label {
+    font-size: 0.7rem;
+    color: #888;
+    margin-bottom: 0.5rem;
+}
+
+.raum-code {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 2rem;
+    color: #ffcc00;
+    text-shadow: 0 0 15px rgba(255, 204, 0, 0.6);
+    letter-spacing: 8px;
+    margin: 0.5rem 0;
+    animation: code-pulsieren 1.5s ease-in-out infinite;
+}
+
+@keyframes code-pulsieren {
+
+    0%,
+    100% {
+        text-shadow: 0 0 15px rgba(255, 204, 0, 0.6);
+    }
+
+    50% {
+        text-shadow: 0 0 25px rgba(255, 204, 0, 0.9), 0 0 40px rgba(255, 204, 0, 0.3);
+    }
+}
+
+.code-hinweis {
+    font-size: 0.65rem;
+    color: #666;
+    margin-top: 0.5rem;
+}
+
+/* Code-Eingabe */
+.code-eingabe {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    align-items: center;
+}
+
+#raum-code-input {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 1.2rem;
+    width: 120px;
+    padding: 0.7rem;
+    text-align: center;
+    letter-spacing: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    color: #ffcc00;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+#raum-code-input::placeholder {
+    color: #444;
+    letter-spacing: 4px;
+}
+
+#raum-code-input:focus {
+    border-color: #4488ff;
+    box-shadow: 0 0 10px rgba(68, 136, 255, 0.3);
+}
+
+/* Status */
+.lobby-status {
+    margin-top: 2rem;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 0.6rem;
+    color: #888;
+    text-align: center;
+    min-height: 1.5rem;
+}
+
+.lobby-status.warten {
+    color: #ffaa44;
+    animation: blinken 1.5s infinite;
+}
+
+.lobby-status.verbunden {
+    color: #44ff44;
+}
+
+.lobby-status.fehler {
+    color: #ff4444;
+}
+
+/* ══════════════════════════════════════════════════════════
+   HUD (Head-Up-Display)
+   ══════════════════════════════════════════════════════════ */
+#hud {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    z-index: 20;
+    pointer-events: none;
+    padding: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+}
+
+/* ── Lebensanzeige ───────────────────────────────────────── */
+.leben-container {
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+.leben-icon {
+    font-size: 1.4rem;
+}
+
+.leben-balken-bg {
+    width: 120px;
+    height: 12px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+#leben-balken {
+    height: 100%;
+    width: 100%;
+    background: #44ff44;
+    border-radius: 6px;
+    transition: width 0.3s, background-color 0.3s;
+}
+
+#leben-wert {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 0.8rem;
+    min-width: 2rem;
+    text-align: right;
+}
+
+/* ── Munitions-/Statusanzeige ────────────────────────────── */
+.status-container {
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 0.7rem;
+}
+
+.status-container .label {
+    color: #aaa;
+}
+
+/* ══════════════════════════════════════════════════════════
+   FADENKREUZ
+   ══════════════════════════════════════════════════════════ */
+#crosshair {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 15;
+    pointer-events: none;
+    width: 24px;
+    height: 24px;
+}
+
+#crosshair::before,
+#crosshair::after {
+    content: '';
+    position: absolute;
+    background: rgba(255, 255, 255, 0.8);
+}
+
+/* Horizontale Linie */
+#crosshair::before {
+    width: 24px;
+    height: 2px;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+}
+
+/* Vertikale Linie */
+#crosshair::after {
+    width: 2px;
+    height: 24px;
+    left: 50%;
+    top: 0;
+    transform: translateX(-50%);
+}
+
+/* Punkt in der Mitte */
+.crosshair-dot {
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    background: #ff4444;
+    border-radius: 50%;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+/* ══════════════════════════════════════════════════════════
+   WAFFE
+   ══════════════════════════════════════════════════════════ */
+#waffe {
+    position: fixed;
+    bottom: 0;
+    right: 10%;
+    z-index: 14;
+    pointer-events: none;
+    font-size: 8rem;
+    line-height: 1;
+    opacity: 0.9;
+    transition: transform 0.05s;
+    filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.5));
+}
+
+#waffe.schiessen {
+    transform: translateY(-10px) rotate(-5deg);
+}
+
+/* ── Mündungsfeuer ───────────────────────────────────────── */
+#muzzle-flash {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(ellipse at center, rgba(255, 200, 0, 0.3) 0%, transparent 60%);
+    z-index: 13;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.05s;
+}
+
+/* ── Schadens-Overlay ────────────────────────────────────── */
+#schaden-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(255, 0, 0, 0.6) 100%);
+    z-index: 12;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+/* ── Ergebnis-Overlay (Sieg/Niederlage) ─────────────────── */
+#ergebnis-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 50;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+.ergebnis-titel {
+    font-family: 'Press Start 2P', monospace;
+    font-size: clamp(2rem, 8vw, 4rem);
+    text-shadow: 0 0 20px currentColor, 0 0 40px currentColor;
+    animation: ergebnis-einblenden 0.5s ease-out;
+}
+
+.ergebnis-titel.sieg {
+    color: #44ff44;
+}
+
+.ergebnis-titel.niederlage {
+    color: #ff4444;
+}
+
+#ergebnis-text {
+    font-family: 'Press Start 2P', monospace;
+    font-size: clamp(0.6rem, 2vw, 1rem);
+    color: #ccc;
+}
+
+#ergebnis-countdown {
+    font-family: 'Press Start 2P', monospace;
+    font-size: clamp(0.5rem, 1.5vw, 0.7rem);
+    color: #888;
+    margin-top: 1rem;
+}
+
+@keyframes ergebnis-einblenden {
+    0% {
+        transform: scale(0.5);
+        opacity: 0;
+    }
+
+    50% {
+        transform: scale(1.2);
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* ══════════════════════════════════════════════════════════
+   MINIMAP
+   ══════════════════════════════════════════════════════════ */
+#minimap-container {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 20;
+    pointer-events: none;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+}
+
+#minimap {
+    display: block;
+    image-rendering: pixelated;
+}
+
+/* ══════════════════════════════════════════════════════════
+   TOUCH-STEUERUNG (Mobile)
+   ══════════════════════════════════════════════════════════ */
+#touch-controls {
+    display: none;
+    /* Wird per JS eingeblendet */
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 30;
+    pointer-events: none;
+}
+
+/* ── Joystick (links) ────────────────────────────────────── */
+#joystick-zone {
+    position: absolute;
+    bottom: 2rem;
+    left: 2rem;
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    pointer-events: all;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#joystick-knob {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0.15) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    transition: transform 0.05s;
+}
+
+/* ── Look-Zone (rechte Hälfte) ───────────────────────────── */
+#look-zone {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 60%;
+    /* Etwas mehr als die Hälfte für bessere Erreichbarkeit */
+    height: 100%;
+    pointer-events: all;
+    z-index: 10;
+}
+
+/* Visuelles Feedback für Schießen (wird via JS getriggert) */
+#look-zone.fire {
+    background: radial-gradient(circle at var(--touch-x, 50%) var(--touch-y, 50%), rgba(255, 50, 50, 0.1) 0%, transparent 50%);
+}
+
+/* ══════════════════════════════════════════════════════════
+   VERBINDUNGSSTATUS
+   ══════════════════════════════════════════════════════════ */
+#verbindung-status {
+    position: fixed;
+    top: 1rem;
+    left: 1rem;
+    z-index: 20;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 0.5rem;
+    color: #888;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ff4444;
+    animation: blinken 2s infinite;
+}
+
+.status-dot.online {
+    background: #44ff44;
+    animation: none;
+}
+
+@keyframes blinken {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.3;
+    }
+}
+
+/* ══════════════════════════════════════════════════════════
+   RESPONSIVE
+   ══════════════════════════════════════════════════════════ */
+
+/* Mobile-Anpassungen */
+@media (max-width: 768px) {
+    #hud {
+        padding: 0.5rem;
+    }
+
+    .leben-container {
+        padding: 0.4rem 0.6rem;
+    }
+
+    .leben-balken-bg {
+        width: 80px;
+        height: 8px;
+    }
+
+    #leben-wert {
+        font-size: 0.6rem;
+    }
+
+    #minimap-container {
+        top: 0.5rem;
+        right: 0.5rem;
+        transform: scale(0.7);
+        transform-origin: top right;
+    }
+
+    #waffe {
+        font-size: 5rem;
+        right: 5%;
+    }
+
+    .steuerung-info {
+        display: none;
+    }
+}

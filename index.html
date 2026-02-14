@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <meta name="description" content="Retro 3D Multiplayer Shooter im Browser – Wolfenstein-Stil mit Three.js">
+    <title>⚔️ RETRO LABYRINTH – 3D Multiplayer Shooter</title>
+
+    <!-- Three.js via CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- PeerJS via CDN (P2P-Verbindung) -->
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+    <!-- Stylesheet -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+
+    <!-- ═════════════════════════════════════════════════════
+         STARTBILDSCHIRM
+         ═════════════════════════════════════════════════════ -->
+    <div id="start-screen">
+        <h1>⚔️ RETRO LABYRINTH</h1>
+        <div class="untertitel">MULTIPLAYER SHOOTER</div>
+        <button id="start-button">▶ SPIEL STARTEN</button>
+        <button id="solo-test-button" class="solo-btn">🚧 ALLEIN TESTEN</button>
+        <div class="steuerung-info">
+            <span>WASD</span> Bewegen &nbsp;|&nbsp;
+            <span>MAUS</span> Umsehen &nbsp;|&nbsp;
+            <span>KLICK</span> Schießen<br>
+            <span>ESC</span> Maus freigeben
+        </div>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════
+         LOBBY-SCREEN (Raum erstellen / beitreten)
+         ═════════════════════════════════════════════════════ -->
+    <div id="lobby-screen">
+        <h2>🎮 MULTIPLAYER LOBBY</h2>
+
+        <div class="lobby-optionen">
+            <!-- Raum erstellen -->
+            <div class="lobby-karte">
+                <h3>🏠 Raum erstellen</h3>
+                <p>Erstelle einen Raum und teile den Code mit deinem Freund.</p>
+                <button id="raum-erstellen-btn" class="lobby-btn erstellen">RAUM ERSTELLEN</button>
+
+                <!-- Code-Anzeige (erscheint nach Erstellung) -->
+                <div id="raum-code-anzeige" style="display: none;">
+                    <div class="code-label">Dein Raum-Code:</div>
+                    <div id="raum-code-text" class="raum-code">----</div>
+                    <div class="code-hinweis">Teile diesen Code mit deinem Mitspieler!</div>
+                </div>
+            </div>
+
+            <div class="lobby-trenner">ODER</div>
+
+            <!-- Raum beitreten -->
+            <div class="lobby-karte">
+                <h3>🚪 Raum beitreten</h3>
+                <p>Gib den 4-Buchstaben-Code deines Freundes ein.</p>
+                <div class="code-eingabe">
+                    <input type="text" id="raum-code-input" maxlength="4" placeholder="CODE" autocomplete="off"
+                        spellcheck="false">
+                    <button id="raum-beitreten-btn" class="lobby-btn beitreten">BEITRETEN</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status-Nachricht -->
+        <div id="lobby-status" class="lobby-status"></div>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════
+         SPIELCONTAINER (Three.js Canvas wird hier eingefügt)
+         ═════════════════════════════════════════════════════ -->
+    <div id="game-container"></div>
+
+    <!-- ═════════════════════════════════════════════════════
+         HUD – Head-Up-Display
+         ═════════════════════════════════════════════════════ -->
+    <div id="hud">
+        <div class="leben-container">
+            <span class="leben-icon">❤️</span>
+            <div class="leben-balken-bg">
+                <div id="leben-balken"></div>
+            </div>
+            <span id="leben-wert">100</span>
+        </div>
+        <div class="status-container">
+            <span class="label">🔫</span>
+            <span>∞</span>
+        </div>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════
+         FADENKREUZ
+         ═════════════════════════════════════════════════════ -->
+    <div id="crosshair">
+        <div class="crosshair-dot"></div>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════
+         WAFFE (Emoji als Platzhalter)
+         ═════════════════════════════════════════════════════ -->
+    <div id="waffe">🔫</div>
+
+    <!-- ═════════════════════════════════════════════════════
+         EFFEKT-OVERLAYS
+         ═════════════════════════════════════════════════════ -->
+    <div id="muzzle-flash"></div>
+    <div id="schaden-overlay"></div>
+
+    <!-- ═════════════════════════════════════════════════════
+         ERGEBNIS-OVERLAY (Sieg/Niederlage)
+         ═════════════════════════════════════════════════════ -->
+    <div id="ergebnis-overlay">
+        <div id="ergebnis-titel" class="ergebnis-titel"></div>
+        <div id="ergebnis-text"></div>
+        <div id="ergebnis-countdown"></div>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════
+         MINIMAP
+         ═════════════════════════════════════════════════════ -->
+    <div id="minimap-container">
+        <canvas id="minimap"></canvas>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════
+         VERBINDUNGSSTATUS
+         ═════════════════════════════════════════════════════ -->
+    <div id="verbindung-status">
+        <div class="status-dot"></div>
+        <span>OFFLINE</span>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════
+         TOUCH-STEUERUNG (wird auf Mobile eingeblendet)
+         ═════════════════════════════════════════════════════ -->
+    <div id="touch-controls">
+        <div id="joystick-zone">
+            <div id="joystick-knob"></div>
+        </div>
+        <div id="look-zone"></div>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════
+         HAUPTSKRIPT (lädt alle Module)
+         ═════════════════════════════════════════════════════ -->
+    <script type="module" src="js/main.js"></script>
+
+</body>
+
+</html>
