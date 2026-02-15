@@ -43,6 +43,10 @@ let gegnerRadarPos = null;      // Die zuletzt "gepinnte" Position
 let letzterRadarPingZeit = 0;   // Zeit des letzten Pings
 const RADAR_INTERVALL = 5.0;    // Alle 5 Sekunden ein Update
 
+// ── Score-System ────────────────────────────────────────────
+let eigenePunkte = 0;
+let gegnerPunkte = 0;
+
 // ── Minimap ─────────────────────────────────────────────────
 let minimapCanvas = null;
 let minimapCtx = null;
@@ -56,6 +60,7 @@ function initSzene() {
     initInput(renderer.domElement);
     initCombat(scene, kamera);
     updateLebenAnzeige();
+    updateScoreAnzeige();
     uhr = new THREE.Clock();
     console.log('[Spiel] Szene initialisiert (wartet auf Labyrinth)');
 }
@@ -100,6 +105,12 @@ function starteSpielMitSeed(seed, istHost) {
     // Lobby ausblenden, Spiel einblenden
     document.getElementById('lobby-screen').style.display = 'none';
 
+    // UI-Rolle setzen
+    const roleEl = document.getElementById('role-indicator');
+    if (roleEl) {
+        roleEl.textContent = istHost ? 'HOST' : 'GAST';
+    }
+
     // Touch-Steuerung auf Mobile anzeigen
     if (istMobileGeraet()) {
         document.getElementById('touch-controls').style.display = 'block';
@@ -112,7 +123,7 @@ function starteSpielMitSeed(seed, istHost) {
     netzwerk.startePositionsUpdates();
 
     spielGestartet = true;
-    console.log('[Spiel] ✅ Spiel gestartet!');
+    console.log('[Spiel] ✅ Spiel gestartet! Ist Host:', istHost);
 }
 
 /**
@@ -142,9 +153,30 @@ function erstelleGegnerMesh() {
     kopf.position.y = 1.8; // Kopf oben auf den Körper setzen
     gegnerMesh.add(kopf);
 
+    // NEU: Visier (vorne am Kopf)
+    const visierGeometrie = new THREE.BoxGeometry(0.3, 0.05, 0.05);
+    const visierMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff }); // Leuchtendes Cyan
+    const visier = new THREE.Mesh(visierGeometrie, visierMaterial);
+    visier.position.set(0, 1.85, -0.2); // Vorne am Kopf positionieren
+    gegnerMesh.add(visier);
+
+    // NEU: Rucksack (hinten am Körper)
+    const rucksackGeometrie = new THREE.BoxGeometry(0.4, 0.8, 0.15);
+    const rucksackMaterial = new THREE.MeshLambertMaterial({ color: 0x444444 });
+    const rucksack = new THREE.Mesh(rucksackGeometrie, rucksackMaterial);
+    rucksack.position.set(0, 1.1, 0.25); // Hinten am Körper positionieren
+    gegnerMesh.add(rucksack);
+
+    // NEU: Waffe (rechts am Körper, nach vorne zeigend)
+    const waffeGeometrie = new THREE.BoxGeometry(0.1, 0.1, 0.5);
+    const waffeMaterial = new THREE.MeshLambertMaterial({ color: 0x777777 });
+    const waffe = new THREE.Mesh(waffeGeometrie, waffeMaterial);
+    waffe.position.set(0.35, 1.1, -0.3); // Rechts vorne positionieren
+    gegnerMesh.add(waffe);
+
     // Startposition (wird durch Netzwerk sofort überschrieben)
-    gegnerMesh.position.set(0, 0.8, 0);
-    gegnerMesh.visible = false; // Erst sichtbar wenn Position empfangen
+    gegnerMesh.position.set(0, 0, 0);
+    gegnerMesh.visible = false;
 
     // Als Ziel für Raycasting registrieren
     gegnerMesh.userData.spielerId = 'gegner'; // Wichtig für Trefferauswertung!
@@ -514,6 +546,14 @@ function zeigeErgebnis(titel, nachricht) {
     const textEl = document.getElementById('ergebnis-text');
     const countdownEl = document.getElementById('ergebnis-countdown');
 
+    // Punkte aktualisieren
+    if (titel === 'SIEG') {
+        eigenePunkte++;
+    } else {
+        gegnerPunkte++;
+    }
+    updateScoreAnzeige();
+
     if (overlay && titelEl && textEl) {
         titelEl.textContent = titel;
         titelEl.className = 'ergebnis-titel ' + (titel === 'SIEG' ? 'sieg' : 'niederlage');
@@ -535,6 +575,17 @@ function zeigeErgebnis(titel, nachricht) {
             }
         }, 1000);
     }
+}
+
+/**
+ * Aktualisiert die Score-Anzeige im HUD.
+ */
+function updateScoreAnzeige() {
+    const eigenEl = document.getElementById('score-eigen');
+    const gegnerEl = document.getElementById('score-gegner');
+    if (eigenEl) eigenEl.textContent = eigenePunkte;
+    if (gegnerEl) gegnerEl.textContent = gegnerPunkte;
+    console.log(`[Score] Stand: ${eigenePunkte} : ${gegnerPunkte}`);
 }
 
 /**
@@ -577,7 +628,12 @@ function starteNeueRunde() {
 
     // Radar-Zustand resetten
     gegnerRadarPos = null;
-    letzterRadarPingZeit = 0;
+    letzterRadarPingZeit = performance.now() / 1000;
+
+    if (gegnerMesh) {
+        gegnerMesh.position.set(0, 0, 0);
+        gegnerMesh.visible = false;
+    }
 
     rundeAktiv = true;
 
@@ -711,13 +767,21 @@ function zeichneMinimap(kamera) {
     if (gegnerMesh && gegnerMesh.visible) {
         // Zeit prüfen für neuen Ping
         const aktuelleZeit = performance.now() / 1000;
-        if (!gegnerRadarPos || aktuelleZeit - letzterRadarPingZeit >= RADAR_INTERVALL) {
-            gegnerRadarPos = {
-                x: gegnerMesh.position.x,
-                z: gegnerMesh.position.z
-            };
-            letzterRadarPingZeit = aktuelleZeit;
-            console.log('[Radar] 📡 Ping! Gegnerposition aktualisiert.');
+
+        // Fix: Radar-Ping nur wenn genug Zeit seit letztem Ping vergangen ist
+        // Verhindert Sofort-Ping bei !gegnerRadarPos direkt nach Rundenstart
+        const zeitSeitLetztemPing = aktuelleZeit - letzterRadarPingZeit;
+
+        if (!gegnerRadarPos || zeitSeitLetztemPing >= RADAR_INTERVALL) {
+            // Nur pingen, wenn wir nicht gerade erst die Runde gestartet haben (Sicherheitsmarge 0.5s)
+            if (zeitSeitLetztemPing > 0.5) {
+                gegnerRadarPos = {
+                    x: gegnerMesh.position.x,
+                    z: gegnerMesh.position.z
+                };
+                letzterRadarPingZeit = aktuelleZeit;
+                console.log('[Radar] 📡 Ping! Gegnerposition aktualisiert.');
+            }
         }
 
         // Radar-Punkt zeichnen

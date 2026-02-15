@@ -118,7 +118,8 @@ export class NetworkManager {
     _richteVerbindungEin(conn) {
         this.verbindung = conn;
 
-        conn.on('open', () => {
+        const initialisiereVerbindung = () => {
+            if (this.verbunden) return; // Doppelte Initialisierung verhindern
             this.verbunden = true;
             this._setzeStatus('VERBUNDEN', true);
             console.log('[Netzwerk] ✅ P2P-Verbindung hergestellt!');
@@ -126,7 +127,14 @@ export class NetworkManager {
             if (this.onSpielerVerbunden) {
                 this.onSpielerVerbunden(conn.peer);
             }
-        });
+        };
+
+        // Falls Verbindung bereits offen (Race Condition Fix)
+        if (conn.open) {
+            initialisiereVerbindung();
+        } else {
+            conn.on('open', initialisiereVerbindung);
+        }
 
         conn.on('data', (nachricht) => {
             this._verarbeiteNachricht(nachricht);
@@ -259,6 +267,8 @@ export class NetworkManager {
      */
     treteRaumBei(code) {
         return new Promise((resolve, reject) => {
+            if (this.verbunden) this.disconnect();
+
             this.istHost = false;
             this.raumCode = code.toUpperCase();
             const zielPeerId = 'retrolabyrinth_' + this.raumCode;
@@ -270,21 +280,45 @@ export class NetworkManager {
                 debug: 1
             });
 
+            // Timer für Timeout hinzufügen (falls PeerJS ewig braucht)
+            const timeout = setTimeout(() => {
+                if (!this.verbunden) {
+                    this._setzeStatus('TIMEOUT', false);
+                    reject(new Error('Verbindungs-Timeout'));
+                }
+            }, 10000);
+
             this.peer.on('open', (id) => {
                 this.spielerId = id;
                 console.log(`[Netzwerk] Eigene Peer-ID: ${id}`);
                 console.log(`[Netzwerk] Verbinde mit Raum: ${this.raumCode}`);
 
                 // Zum Host verbinden
-                const conn = this.peer.connect(zielPeerId, {
-                    reliable: true
-                });
+                try {
+                    const conn = this.peer.connect(zielPeerId, {
+                        reliable: true
+                    });
 
-                this._richteVerbindungEin(conn);
-                resolve();
+                    // ERST WENN DIE VERBINDUNG OFFEN IST, RESOLVEN WIR
+                    conn.on('open', () => {
+                        clearTimeout(timeout);
+                        this._richteVerbindungEin(conn);
+                        resolve();
+                    });
+
+                    conn.on('error', (err) => {
+                        clearTimeout(timeout);
+                        reject(err);
+                    });
+
+                } catch (err) {
+                    clearTimeout(timeout);
+                    reject(err);
+                }
             });
 
             this.peer.on('error', (err) => {
+                clearTimeout(timeout);
                 console.error('[Netzwerk] Peer-Fehler:', err);
                 if (err.type === 'peer-unavailable') {
                     this._setzeStatus('RAUM NICHT GEFUNDEN', false);

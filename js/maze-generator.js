@@ -324,7 +324,7 @@ export function buildMazeGeometry(scene, labyrinth) {
 
     // ── Wand-Geometrie als InstancedMesh (Performance!) ──
     const wandGeometrie = new THREE.BoxGeometry(WAND_GROESSE, WAND_HOEHE, WAND_GROESSE);
-    const wandMaterial = new THREE.MeshLambertMaterial({ map: wandTextur });
+    const wandMaterial = new THREE.MeshPhongMaterial({ map: wandTextur });
     const wandInstanzen = new THREE.InstancedMesh(wandGeometrie, wandMaterial, wandAnzahl);
     wandInstanzen.castShadow = true;
     wandInstanzen.receiveShadow = true;
@@ -353,7 +353,7 @@ export function buildMazeGeometry(scene, labyrinth) {
     const bodenTiefe = labyrinth.length * WAND_GROESSE;
     const bodenGeometrie = new THREE.PlaneGeometry(bodenBreite, bodenTiefe);
     bodenTextur.repeat.set(labyrinth[0].length / 2, labyrinth.length / 2);
-    const bodenMaterial = new THREE.MeshLambertMaterial({ map: bodenTextur });
+    const bodenMaterial = new THREE.MeshPhongMaterial({ map: bodenTextur });
     const boden = new THREE.Mesh(bodenGeometrie, bodenMaterial);
     boden.rotation.x = -Math.PI / 2;
     boden.position.set(bodenBreite / 2 - WAND_GROESSE / 2, 0, bodenTiefe / 2 - WAND_GROESSE / 2);
@@ -361,7 +361,7 @@ export function buildMazeGeometry(scene, labyrinth) {
     scene.add(boden);
 
     // ── Decke ──
-    const deckenMaterial = new THREE.MeshLambertMaterial({ color: DECKEN_FARBE });
+    const deckenMaterial = new THREE.MeshPhongMaterial({ color: DECKEN_FARBE });
     const decke = new THREE.Mesh(bodenGeometrie.clone(), deckenMaterial);
     decke.rotation.x = Math.PI / 2;
     decke.position.set(bodenBreite / 2 - WAND_GROESSE / 2, WAND_HOEHE, bodenTiefe / 2 - WAND_GROESSE / 2);

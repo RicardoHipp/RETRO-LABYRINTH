@@ -263,7 +263,17 @@ export function schiessen(kamera, scene, aktuelleZeit) {
 
     // Einschlag am Endpunkt (Wand) erzeugen
     if (alleWandTreffer.length > 0) {
-        erzeugeEinschlag(scene, alleWandTreffer[0].point);
+        const treffer = alleWandTreffer[0];
+        let normale = null;
+
+        // Versuchen die Normale aus dem Raycast-Treffer zu ziehen
+        if (treffer.face) {
+            normale = treffer.face.normal.clone();
+            // In Welt-Koordinaten transformieren
+            normale.applyQuaternion(treffer.object.quaternion);
+        }
+
+        erzeugeEinschlag(scene, treffer.point, normale);
     }
 
     // Trefferauswertung (Spieler)
@@ -404,18 +414,32 @@ function entferneStrahl() {
  * Erzeugt einen visuellen Einschlag-Effekt am Trefferpunkt.
  * @param {THREE.Scene} scene - Die Spielszene
  * @param {THREE.Vector3} punkt - Trefferpunkt in der Welt
+ * @param {THREE.Vector3} normal - (Optional) Normalenvektor der getroffenen Fläche
  */
-function erzeugeEinschlag(scene, punkt) {
+function erzeugeEinschlag(scene, punkt, normal = null) {
     // Leuchtender Punkt am Trefferpunkt
     const geometrie = new THREE.SphereGeometry(0.08, 6, 6);
     const material = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
     const einschlag = new THREE.Mesh(geometrie, material);
     einschlag.position.copy(punkt);
+
+    // Kleiner Offset, damit der Punkt nicht direkt in der Wand flimmert (Z-Fighting)
+    if (normal) {
+        einschlag.position.add(normal.clone().multiplyScalar(0.02));
+    }
+
     scene.add(einschlag);
 
     // Einschlag-Licht (kurzer heller Blitz am Auftreffpunkt)
-    const licht = new THREE.PointLight(0xffaa00, 2, 5);
+    const licht = new THREE.PointLight(0xffaa00, 5, 6);
     licht.position.copy(punkt);
+
+    // WICHTIG: Das Licht ein Stück von der Wand wegziehen, 
+    // damit die getroffene Wand auch hell wird!
+    if (normal) {
+        licht.position.add(normal.clone().multiplyScalar(0.1));
+    }
+
     scene.add(licht);
 
     // Nach kurzer Zeit entfernen

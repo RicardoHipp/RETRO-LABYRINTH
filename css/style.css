@@ -403,6 +403,50 @@ body {
     align-items: flex-end;
 }
 
+/* ── Score-Anzeige (Oben Mitte) ─────────────────────────── */
+.score-container {
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.8rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 1.2rem;
+    pointer-events: none;
+    z-index: 21;
+}
+
+#score-eigen {
+    color: #44ff44;
+    text-shadow: 0 0 10px rgba(68, 255, 68, 0.5);
+}
+
+.score-separator {
+    color: #888;
+}
+
+#score-gegner {
+    color: #ff4444;
+    text-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
+}
+
+.role-text {
+    color: #888;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    margin-right: 0.8rem;
+    letter-spacing: 1px;
+    font-family: 'Press Start 2P', monospace;
+}
+
 /* ── Lebensanzeige ───────────────────────────────────────── */
 .leben-container {
     background: rgba(0, 0, 0, 0.6);
