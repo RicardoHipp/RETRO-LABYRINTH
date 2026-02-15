@@ -23,7 +23,8 @@ const MAX_NICK_WINKEL = Math.PI / 2 - 0.1; // Fast 90° nach oben/unten
 let renderer = null;
 let kamera = null;
 let scene = null;
-let spielerLicht = null;
+// let spielerLicht = null; // Entfernt für Wandbeleuchtung
+
 
 // Blickwinkel (Euler-Rotation)
 let gierWinkel = 0;  // Yaw – horizontale Drehung
@@ -43,8 +44,8 @@ export function initRenderer() {
         // Szene selektiv leeren
         const zuEntfernen = [];
         scene.children.forEach(obj => {
-            // Kamera und Spielerlicht NIEMALS löschen/disposen
-            if (obj === kamera || obj === spielerLicht) return;
+            // Kamera NIEMALS löschen/disposen
+            if (obj === kamera) return;
             zuEntfernen.push(obj);
         });
 
@@ -85,25 +86,22 @@ export function initRenderer() {
     renderer = new THREE.WebGLRenderer({ antialias: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.BasicShadowMap;
+    // renderer.shadowMap.enabled = true;
+    // renderer.shadowMap.type = THREE.BasicShadowMap;
+
 
     const container = document.getElementById('game-container');
     container.innerHTML = ''; // Canvas-Leichen entfernen
     container.appendChild(renderer.domElement);
 
     // ── Beleuchtung ─────────────────────────────────────────
-    const ambientLicht = new THREE.AmbientLight(0x404060, 0.3);
+    const ambientLicht = new THREE.AmbientLight(0x404060, 0.4); // Etwas heller für Grundstimmung
     scene.add(ambientLicht);
 
-    spielerLicht = new THREE.PointLight(0xffaa44, 1.5, 12);
-    spielerLicht.position.set(0, AUGEN_HOEHE, 0);
-    spielerLicht.castShadow = true;
-    scene.add(spielerLicht);
 
     window.addEventListener('resize', onResize);
 
-    console.log('[Renderer] Three.js Renderer initialisiert');
+    console.log('[Renderer] Three.js v1.1.5 Renderer bereit (Lambert-Update)');
     return { renderer, kamera, scene };
 }
 
@@ -133,11 +131,31 @@ export function getGierWinkel() {
 }
 
 /**
- * Aktualisiert das Spieler-Licht auf die aktuelle Kameraposition.
+ * Deaktiviert: Spieler-Licht wird nicht mehr genutzt.
  */
 export function updateSpielerLicht() {
-    if (spielerLicht && kamera) {
-        spielerLicht.position.copy(kamera.position);
+    // Leer für Kompatibilität
+}
+
+/**
+ * Bereitet den Renderer vor (Shader-Precompilation).
+ * Verhindert Ruckler, wenn Objekte zum ersten Mal im Sichtfeld erscheinen.
+ * sollte nach dem Aufbau des Levels aufgerufen werden.
+ * @param {THREE.Scene} scene 
+ * @param {THREE.Camera} kamera 
+ */
+export function prepareRenderer(scene, kamera) {
+    if (renderer && scene && kamera) {
+        console.log('[Renderer] Starte Shader-Vorbereitung...');
+
+        // 1. Three.js interne Kompilierung
+        renderer.compile(scene, kamera);
+
+        // 2. Ein "Warmup-Render" erzwingen (offscreen oder mini-frame)
+        // Wir rendern einen Frame, bevor der Spieler die Szene sieht
+        renderer.render(scene, kamera);
+
+        console.log('[Renderer] Shader-Vorbereitung abgeschlossen.');
     }
 }
 
@@ -180,28 +198,54 @@ export function getRenderer() {
 }
 
 /**
- * Erzeugt ein 3D-Modell für eine Energiezelle (Munition).
+ * Erzeugt ein 3D-Modell für ein Pickup basierend auf dem Typ.
+ * @param {string} typ - Der Typ des Pickups (z.B. 'AMMO', 'HEALTH')
  * @returns {THREE.Group}
  */
-export function erzeugeMunitionModel() {
+export function erzeugePickupModel(typ) {
     const group = new THREE.Group();
+    group.userData.typ = typ;
 
-    // Gehäuse (Zylinder)
-    const geoHuelse = new THREE.CylinderGeometry(0.15, 0.15, 0.4, 8);
-    const matHuelse = new THREE.MeshPhongMaterial({ color: 0x444444, shininess: 100 });
-    const huelse = new THREE.Mesh(geoHuelse, matHuelse);
-    group.add(huelse);
+    switch (typ) {
+        case 'AMMO':
+            // Gehäuse (Zylinder)
+            const geoHuelse = new THREE.CylinderGeometry(0.15, 0.15, 0.4, 8);
+            const matHuelse = new THREE.MeshLambertMaterial({ color: 0x444444 });
+            const huelse = new THREE.Mesh(geoHuelse, matHuelse);
+            group.add(huelse);
 
-    // Glühender Kern (innerer Zylinder)
-    const geoKern = new THREE.CylinderGeometry(0.16, 0.16, 0.2, 8);
-    const matKern = new THREE.MeshBasicMaterial({ color: 0x00ffff });
-    const kern = new THREE.Mesh(geoKern, matKern);
-    group.add(kern);
+            // Glühender Kern (innerer Zylinder)
+            const geoKern = new THREE.CylinderGeometry(0.16, 0.16, 0.2, 8);
+            const matKern = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+            const kern = new THREE.Mesh(geoKern, matKern);
+            group.add(kern);
 
-    // Kleines Licht für das Pickup
-    const licht = new THREE.PointLight(0x00ffff, 1, 2);
-    licht.castShadow = false; // Performance: Kein Schattenwurf für Pickups
-    group.add(licht);
+            // Kleines Licht
+            const lichtAmmo = new THREE.PointLight(0x00ffff, 1, 2);
+            lichtAmmo.castShadow = false;
+            group.add(lichtAmmo);
+            break;
+
+        case 'HEALTH':
+            // Rote Box mit weißem Kreuz 
+            const geoBox = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+            const matBox = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+            const box = new THREE.Mesh(geoBox, matBox);
+            group.add(box);
+
+            const geoCross = new THREE.BoxGeometry(0.35, 0.1, 0.1);
+            const matCross = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const cross1 = new THREE.Mesh(geoCross, matCross);
+            const cross2 = new THREE.Mesh(geoCross, matCross);
+            cross2.rotation.y = Math.PI / 2;
+            group.add(cross1);
+            group.add(cross2);
+
+            const lichtHealth = new THREE.PointLight(0xff0000, 1, 2);
+            lichtHealth.castShadow = false;
+            group.add(lichtHealth);
+            break;
+    }
 
     aktivePickups.push(group);
     return group;
@@ -241,4 +285,4 @@ function onResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-export { AUGEN_HOEHE };
+export { AUGEN_HOEHE, aktivePickups };

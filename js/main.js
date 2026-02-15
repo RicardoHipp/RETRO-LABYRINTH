@@ -14,10 +14,19 @@
  * ============================================================
  */
 
-import { generateMaze, buildMazeGeometry, findeFreiePosition, generiereZufallsSeed, WAND_GROESSE } from './maze-generator.js';
+import {
+    generateMaze,
+    buildMazeGeometry,
+    findeFreiePosition,
+    generiereZufallsSeed,
+    istWand,
+    addWallLights,
+    WAND_GROESSE,
+    WAND_HOEHE
+} from './maze-generator.js';
 import { initInput, getLookDelta, bewegeSpieler, verbrauchSchuss } from './input-handler.js';
-import { initRenderer, updateKameraRotation, getGierWinkel, updateSpielerLicht, renderFrame, getKamera, getScene, getRenderer, AUGEN_HOEHE, erzeugeMunitionModel, entfernePickupModel } from './renderer.js';
-import { initCombat, schiessen, updateCombat, registriereZiel, entferneZiel, entferneAlleZiele, empfangeSchaden, updateLebenAnzeige, resetLeben, addMunition, updateMunitionAnzeige, resetMunition, getMunition, MAX_MUNITION, triggereSchussVisuals } from './combat.js';
+import { initRenderer, updateKameraRotation, getGierWinkel, updateSpielerLicht, prepareRenderer, renderFrame, getKamera, getScene, getRenderer, AUGEN_HOEHE, erzeugePickupModel, entfernePickupModel } from './renderer.js';
+import { initCombat, schiessen, updateCombat, registriereZiel, entferneZiel, entferneAlleZiele, empfangeSchaden, healPlayer, updateLebenAnzeige, resetLeben, addMunition, updateMunitionAnzeige, resetMunition, getMunition, MAX_MUNITION, triggereSchussVisuals, getLeben, MAX_LEBEN } from './combat.js';
 import { NetworkManager } from './network-manager.js';
 
 // ── Spiel-Einstellungen ─────────────────────────────────────
@@ -35,13 +44,19 @@ let spielGestartet = false;
 let spielSeed = 0;
 let letzterRespawnZeit = 0;
 let rundeAktiv = true; // false wenn jemand besiegt wurde
-let munitionPickups = []; // Liste der verfügbaren Munitionspacks
+let pickups = []; // Liste der verfügbaren Pickups (früher munitionPickups)
 let neustartTimer = null; // Globaler Timer für Neustart-Countdown
 
 // Radar-Ping System (Gegner auf Minimap)
 let gegnerRadarPos = null;      // Die zuletzt "gepinnte" Position
 let letzterRadarPingZeit = 0;   // Zeit des letzten Pings
 const RADAR_INTERVALL = 5.0;    // Alle 5 Sekunden ein Update
+
+// Drosselung von unkritischen Systemen (Performance)
+let letztesMinimapUpdate = 0;
+const MINIMAP_FPS = 20; // 20 Updates pro Sekunde reichen völlig
+let letztesPickupUpdate = 0;
+const PICKUP_FPS = 10;  // 10 Mal pro Sekunde prüfen reicht
 
 // ── Score-System ────────────────────────────────────────────
 let eigenePunkte = 0;
@@ -81,18 +96,24 @@ function starteSpielMitSeed(seed, istHost) {
     const kamera = getKamera();
 
     // Alte Pickups aufräumen
-    for (let p of munitionPickups) {
+    for (let p of pickups) {
         scene.remove(p.model);
         entfernePickupModel(p.model);
     }
-    munitionPickups = [];
+    pickups = [];
 
     // Labyrinth generieren (gleicher Seed = gleiches Labyrinth)
     labyrinth = generateMaze(LABYRINTH_BREITE, LABYRINTH_HOEHE, seed);
     buildMazeGeometry(scene, labyrinth);
 
-    // Munition spawnen
-    spawnMunitionPacks(seed);
+    // Wandbeleuchtung hinzufügen
+    addWallLights(scene, labyrinth);
+
+    // Munitionspacks spawnen
+    spawnInitialPickups(seed);
+
+    // Shader Pre-compilation (verhindert Ruckler beim Loslaufen)
+    prepareRenderer(scene, kamera);
 
     // Spieler spawnen – Host an Position 0, Guest an Position weit entfernt
     const spawnIndex = istHost ? 0 : Math.floor(LABYRINTH_BREITE * LABYRINTH_HOEHE * 0.8);
@@ -198,10 +219,10 @@ function erstelleGegnerMesh() {
 }
 
 /**
- * Spawnt Munitionspacks im Labyrinth basierend auf dem Seed.
+ * Spawnt initiale Pickups im Labyrinth basierend auf dem Seed.
  * @param {number} seed 
  */
-function spawnMunitionPacks(seed) {
+function spawnInitialPickups(seed) {
     // Einfacher Zufallsgenerator basierend auf Seed
     let random = seed;
     const seededRandom = () => {
@@ -209,43 +230,45 @@ function spawnMunitionPacks(seed) {
         return (random - 1) / 2147483646;
     };
 
-    const anzahl = 6; // Starten mit 6 Packs
+    const anzahl = 6;
     for (let i = 0; i < anzahl; i++) {
-        // Initial-Packs werden durch Seed bei beiden lokal erstellt, NICHT senden
-        spawnEinzelnesPickup(seededRandom, `ammo_init_${i}`, false);
+        // Initiale Packs sind immer Munition für den Start
+        spawnEinzelnesPickup('AMMO', seededRandom, `pickup_init_${i}`, false);
     }
-    console.log(`[Spiel] ${anzahl} Munitionspacks zum Start gespawnt`);
+    console.log(`[Spiel] ${anzahl} Initial-Pickups gespawnt`);
 }
 
 /**
- * Spawnt ein einzelnes Munitionspack an einer zufälligen freien Stelle.
+ * Spawnt ein einzelnes Pickup an einer zufälligen freien Stelle.
+ * @param {string} typ - Der Item-Typ ('AMMO', 'HEALTH' etc.)
  * @param {function} randomFunc - Optionale Zufallsfunktion
- * @param {string} vorgabeId - Optionale ID (für deterministische Start-Pakete)
+ * @param {string} vorgabeId - Optionale ID
  * @param {boolean} sollSenden - Ob der Gast via Netzwerk informiert werden soll
  */
-function spawnEinzelnesPickup(randomFunc = Math.random, vorgabeId = null, sollSenden = true) {
+function spawnEinzelnesPickup(typ = 'AMMO', randomFunc = Math.random, vorgabeId = null, sollSenden = true) {
     const scene = getScene();
     if (!scene) return null;
 
     const randIdx = Math.floor(randomFunc() * LABYRINTH_BREITE * LABYRINTH_HOEHE);
     const pos = findeFreiePosition(labyrinth, randIdx);
 
-    // Eindeutige ID generieren (vorgegeben oder dynamisch)
-    const id = vorgabeId || `ammo_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    // Eindeutige ID generieren
+    const id = vorgabeId || `pickup_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
-    const model = erzeugeMunitionModel();
+    const model = erzeugePickupModel(typ);
     model.position.set(pos.x, 0.5, pos.z);
     scene.add(model);
 
-    munitionPickups.push({
+    pickups.push({
         id: id,
+        typ: typ,
         pos: pos,
         model: model
     });
 
-    // Wenn Host: Gast informieren (nur bei dynamischen Respawns nötig)
+    // Wenn Host: Gast informieren
     if (sollSenden && netzwerk && netzwerk.istHost && netzwerk.verbunden) {
-        netzwerk.sende('new_pickup', { id, pos });
+        netzwerk.sende('new_pickup', { id, pos, typ });
     }
 
     return id;
@@ -255,25 +278,27 @@ function spawnEinzelnesPickup(randomFunc = Math.random, vorgabeId = null, sollSe
  * Spawnt ein Pickup an einer im Netzwerk empfangenen Position (nur Gast).
  * @param {string} id 
  * @param {object} pos 
+ * @param {string} typ
  */
-export function spawnNetzwerkPickup(id, pos) {
+export function spawnNetzwerkPickup(id, pos, typ = 'AMMO') {
     const scene = getScene();
     if (!scene) return;
 
-    const model = erzeugeMunitionModel();
+    const model = erzeugePickupModel(typ);
     model.position.set(pos.x, 0.5, pos.z);
     scene.add(model);
 
-    munitionPickups.push({
+    pickups.push({
         id: id,
+        typ: typ,
         pos: pos,
         model: model
     });
-    console.log(`[Netzwerk] Neues Munitionspack empfangen: ${id}`);
+    console.log(`[Netzwerk] Neues Pickup empfangen: ${typ} (${id})`);
 }
 
 /**
- * Prüft auf Kollisionen mit Munitionspacks.
+ * Prüft auf Kollisionen mit Pickups.
  */
 function updatePickups() {
     if (!spielGestartet || !rundeAktiv) return;
@@ -281,25 +306,46 @@ function updatePickups() {
     const kamera = getKamera();
     const spielerPos = kamera.position;
 
-    for (let i = munitionPickups.length - 1; i >= 0; i--) {
-        const p = munitionPickups[i];
+    for (let i = pickups.length - 1; i >= 0; i--) {
+        const p = pickups[i];
         const dx = spielerPos.x - p.pos.x;
         const dz = spielerPos.z - p.pos.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
+        const distSq = dx * dx + dz * dz;
 
-        // Einsammel-Radius: 0.6 Einheiten
-        if (dist < 0.6) {
-            // Nur einsammeln, wenn das Limit (20) noch nicht erreicht ist
-            if (getMunition() < MAX_MUNITION) {
-                console.log(`[Spiel] Munition eingesammelt: ${p.id}`);
-                addMunition(5); // +5 Schuss
+        // Einsammel-Radius: 0.6 Einheiten (quadriert = 0.36)
+        if (distSq < 0.36) {
+            if (wendePickupEffektAn(p.typ)) {
+                console.log(`[Spiel] Pickup eingesammelt: ${p.typ} (${p.id})`);
 
                 // Vom Netzwerk benachrichtigen
                 netzwerk.sende('pickup_collected', { id: p.id });
-
                 entfernePickup(p.id);
             }
         }
+    }
+}
+
+/**
+ * Wendet den Effekt eines Pickups auf den Spieler an.
+ * @param {string} typ - Item-Typ
+ * @returns {boolean} true wenn erfolgreich eingesammelt
+ */
+function wendePickupEffektAn(typ) {
+    switch (typ) {
+        case 'AMMO':
+            if (getMunition() < MAX_MUNITION) {
+                addMunition(5);
+                return true;
+            }
+            return false;
+        case 'HEALTH':
+            if (getLeben() < MAX_LEBEN) {
+                healPlayer(25);
+                return true;
+            }
+            return false;
+        default:
+            return false;
     }
 }
 
@@ -308,13 +354,13 @@ function updatePickups() {
  * @param {string} id 
  */
 export function entfernePickup(id) {
-    const idx = munitionPickups.findIndex(p => p.id === id);
+    const idx = pickups.findIndex(p => p.id === id);
     if (idx !== -1) {
-        const p = munitionPickups[idx];
+        const p = pickups[idx];
         const scene = getScene();
         if (scene) scene.remove(p.model);
         entfernePickupModel(p.model);
-        munitionPickups.splice(idx, 1);
+        pickups.splice(idx, 1);
     }
 }
 
@@ -587,28 +633,26 @@ function richteNetzwerkCallbacks() {
     };
 
     // Neue Munitionspacks empfangen (nur Gast)
-    netzwerk.onNewPickup = (id, pos) => {
-        spawnNetzwerkPickup(id, pos);
+    netzwerk.onNewPickup = (id, pos, typ) => {
+        spawnNetzwerkPickup(id, pos, typ);
     };
 
     // Schüsse empfangen
-    netzwerk.onSchussEmpfangen = (start, ende) => {
+    netzwerk.onSchussEmpfangen = (start, ende, hitType) => {
         const scene = getScene();
         let muzzlePos = start;
 
         // Wenn der Gegner existiert, holen wir die Position direkt von seiner Waffe
-        // Das ist viel präziser als es mathematisch zu raten
         if (gegnerMesh) {
             const waffe = gegnerMesh.children.find(c => c.name === 'weapon');
             if (waffe) {
-                // Die Mündung ist am vorderen Ende der Waffe (Laufende bei z = -0.25 relativ zum Box-Zentrum)
                 const tempPos = new THREE.Vector3(0, 0, -0.25);
                 waffe.localToWorld(tempPos);
                 muzzlePos = tempPos;
             }
         }
 
-        triggereSchussVisuals(scene, muzzlePos, ende);
+        triggereSchussVisuals(scene, muzzlePos, ende, hitType || 'SPARKS');
     };
 
     // WICHTIG: Neuen Seed für Runden-Neustart empfangen (nur Gast)
@@ -699,6 +743,13 @@ function starteNeueRunde() {
     // Kampf-Ziele resetten
     entferneAlleZiele();
 
+    // Pickups säubern
+    pickups.forEach(p => {
+        scene.remove(p.model);
+        entfernePickupModel(p.model);
+    });
+    pickups = [];
+
     // Gegner-Mesh wiederherstellen
     if (gegnerMesh) {
         scene.add(gegnerMesh);
@@ -745,6 +796,7 @@ function starteNeueRunde() {
  * Der Haupt-Game-Loop. Wird jeden Frame aufgerufen.
  */
 function gameLoop() {
+    const frameStart = performance.now();
     requestAnimationFrame(gameLoop);
 
     if (!spielGestartet) {
@@ -758,15 +810,32 @@ function gameLoop() {
     const kamera = getKamera();
     const scene = getScene();
 
-    // ── 1. Eingabe verarbeiten ──────────────────────────────
+    // Profiling-Helfer
+    const messpunkt = (name, start) => {
+        const dauer = performance.now() - start;
+        if (dauer > 2.0) { // Nur melden wenn > 2ms (kritische Schwelle)
+            console.warn(`[Profile] ${name} dauerte ${dauer.toFixed(2)}ms`);
+        }
+        return performance.now();
+    };
+
+    let p = performance.now();
+
+    // ── 1. Eingabe & Kamera ──────────────────────────────
     const lookDelta = getLookDelta();
     updateKameraRotation(lookDelta);
+    p = messpunkt("Eingabe/Rotation", p);
 
-    // ── 2. Spieler bewegen (mit Kollision) ──────────────────
+    // ── 2. Spieler bewegen (Kollision) ──────────────────
     bewegeSpieler(kamera, deltaZeit, getGierWinkel(), labyrinth);
+    p = messpunkt("Bewegung/Kollision", p);
 
-    // ── Pickups prüfen ──────────────────────────────────────
-    updatePickups();
+    // ── Pickups prüfen (Gedrosselt) ──────────────
+    if (aktuelleZeit - letztesPickupUpdate > 1 / PICKUP_FPS) {
+        updatePickups();
+        letztesPickupUpdate = aktuelleZeit;
+        p = messpunkt("Pickups", p);
+    }
 
     // ── 3. Schuss prüfen ────────────────────────────────────
     if (rundeAktiv && verbrauchSchuss()) {
@@ -774,43 +843,56 @@ function gameLoop() {
 
         // Schuss ans Netzwerk senden (Visuals für den Gegner)
         if (netzwerk.verbunden && ergebnis.strahlStart && ergebnis.strahlEnde) {
-            netzwerk.sendeSchuss(ergebnis.strahlStart, ergebnis.strahlEnde);
+            netzwerk.sendeSchuss(ergebnis.strahlStart, ergebnis.strahlEnde, ergebnis.hitType);
         }
 
         if (ergebnis.treffer) {
             // Schaden senden, den wir in combat.js berechnet haben (Headshot-Support)
-            netzwerk.sendHit(ergebnis.spielerId, ergebnis.schaden);
+            netzwerk.sendHit(ergebnis.spielerId, ergebnis.schaden, ergebnis.hitType);
         }
+        p = messpunkt("Schiessen", p);
     }
 
     // ── 4. Kampf-System aktualisieren ───────────────────────
     updateCombat(deltaZeit, kamera);
+    p = messpunkt("Combat-Update", p);
 
     // ── Munition Respawn (nur Host) ──────────────────────────
     if (netzwerk.istHost && rundeAktiv) {
         if (aktuelleZeit - letzterRespawnZeit > RESPAWN_INTERVAL) {
             letzterRespawnZeit = aktuelleZeit;
-            if (munitionPickups.length < MAX_PICKUPS_ON_GROUND) {
-                spawnEinzelnesPickup();
-                console.log('[Spiel] Munition-Respawn getriggert');
+            if (pickups.length < MAX_PICKUPS_ON_GROUND) {
+                // 80% Munition, 20% Heilung
+                const r = Math.random();
+                const typ = r < 0.8 ? 'AMMO' : 'HEALTH';
+                spawnEinzelnesPickup(typ);
             }
         }
     }
 
-    // ── 5. Netzwerk: Position senden ────────────────────────
+    // ── Netzwerk: Position senden ────────────────────────
     // Wir senden die Bodenposition (Y=0), nicht die Kamerahöhe!
     // Nutze Temp-Objekt um Allokation zu vermeiden
     bodenPosTemp.set(kamera.position.x, 0, kamera.position.z);
     netzwerk.sendPlayerPosition(bodenPosTemp, kamera.rotation);
+    p = messpunkt("Netzwerk-Send", p);
 
-    // ── 6. Spieler-Licht aktualisieren ──────────────────────
-    updateSpielerLicht();
 
-    // ── 7. Minimap aktualisieren ────────────────────────────
-    zeichneMinimap(kamera);
+    // ── 5. Minimap (Gedrosselt) ─────
+    if (aktuelleZeit - letztesMinimapUpdate > 1 / MINIMAP_FPS) {
+        zeichneMinimap(kamera);
+        letztesMinimapUpdate = aktuelleZeit;
+        p = messpunkt("Minimap", p);
+    }
 
-    // ── 8. Rendern ──────────────────────────────────────────
+    // ── 6. Rendern ──────────────────────────────────────────
     renderFrame();
+    p = messpunkt("Rendern", p);
+
+    const frameGesamt = performance.now() - frameStart;
+    if (frameGesamt > 16.6) { // Länger als ein 60FPS Frame
+        // console.warn(`[Profile] Gesamter Frame dauerte ${frameGesamt.toFixed(2)}ms`);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -886,7 +968,6 @@ function zeichneMinimap(kamera) {
                     z: gegnerMesh.position.z
                 };
                 letzterRadarPingZeit = aktuelleZeit;
-                console.log('[Radar] 📡 Ping! Gegnerposition aktualisiert.');
             }
         }
 

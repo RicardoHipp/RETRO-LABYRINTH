@@ -206,13 +206,13 @@ export class NetworkManager {
 
             case 'new_pickup':
                 if (this.onNewPickup) {
-                    this.onNewPickup(nachricht.daten.id, nachricht.daten.pos);
+                    this.onNewPickup(nachricht.daten.id, nachricht.daten.pos, nachricht.daten.typ);
                 }
                 break;
 
             case 'schuss':
                 if (this.onSchussEmpfangen) {
-                    this.onSchussEmpfangen(nachricht.daten.start, nachricht.daten.ende);
+                    this.onSchussEmpfangen(nachricht.daten.start, nachricht.daten.ende, nachricht.daten.hitType);
                 }
                 break;
 
@@ -424,12 +424,12 @@ export class NetworkManager {
 
     /**
      * Sendet eine Treffer-Meldung an den Peer.
-     * @param {string} zielId - ID des getroffenen Spielers (wird ignoriert bei P2P)
+     * @param {string} zielId - ID des getroffenen Spielers
      * @param {number} schaden - Verursachter Schaden
+     * @param {string} hitType - 'SPARKS' oder 'BLOOD'
      */
-    sendHit(zielId, schaden) {
-        this.sende('treffer', { schaden: schaden });
-        console.log(`[Netzwerk] Treffer gesendet (${schaden} Schaden)`);
+    sendHit(zielId, schaden, hitType = 'BLOOD', punkt = null) {
+        this.sende('treffer', { schaden: schaden, hitType: hitType, punkt: punkt });
     }
 
     /**
@@ -442,13 +442,15 @@ export class NetworkManager {
 
     /**
      * Sendet Schuss-Visuals an den Peer.
-     * @param {THREE.Vector3} start - Startpunkt des Schusses
-     * @param {THREE.Vector3} ende - Endpunkt des Schusses
+     * @param {THREE.Vector3} start - Startpunkt
+     * @param {THREE.Vector3} ende - Endpunkt
+     * @param {string} hitType - 'SPARKS' oder 'BLOOD'
      */
-    sendeSchuss(start, ende) {
+    sendeSchuss(start, ende, hitType = 'SPARKS') {
         this.sende('schuss', {
             start: { x: start.x, y: start.y, z: start.z },
-            ende: { x: ende.x, y: ende.y, z: ende.z }
+            ende: { x: ende.x, y: ende.y, z: ende.z },
+            hitType: hitType
         });
     }
 

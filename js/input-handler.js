@@ -50,6 +50,12 @@ let schussAngefordert = false;
 // Spieler-Kollisionsradius
 const SPIELER_RADIUS = 0.4;
 
+// Auto-Walk Zustand
+let autoWalkAktiv = false;
+let autoWalkPhase = 0; // 0=Vor, 1=Rechts, 2=Zurück, 3=Links
+let autoWalkDistanz = 0;
+const AUTO_WALK_ZIEL = 4.0; // 2 Felder (WAND_GROESSE = 2.0)
+
 // Bewegungsgeschwindigkeit
 const BEWEGUNGS_SPEED = 5.0; // Einheiten pro Sekunde
 
@@ -74,6 +80,12 @@ export function initInput(canvas) {
             case 'KeyS': case 'ArrowDown': tasten.zurueck = false; break;
             case 'KeyA': case 'ArrowLeft': tasten.links = false; break;
             case 'KeyD': case 'ArrowRight': tasten.rechts = false; break;
+            case 'KeyR':
+                autoWalkAktiv = !autoWalkAktiv;
+                autoWalkPhase = 0;
+                autoWalkDistanz = 0;
+                console.log('[Input] Auto-Walk ' + (autoWalkAktiv ? 'AN' : 'AUS'));
+                break;
         }
     });
 
@@ -326,6 +338,16 @@ export function getMovementVector() {
         vorwaerts = -joystickDeltaY; // Y invertiert (oben = vorwärts)
     }
 
+    // Auto-Walk (überschreibt alles)
+    if (autoWalkAktiv) {
+        switch (autoWalkPhase) {
+            case 0: vorwaerts = 1; break;  // Vorwärts
+            case 1: seitwaerts = 1; break; // Rechts
+            case 2: vorwaerts = -1; break; // Zurück
+            case 3: seitwaerts = -1; break;// Links
+        }
+    }
+
     return { vorwaerts, seitwaerts };
 }
 
@@ -391,6 +413,18 @@ export function bewegeSpieler(kamera, deltaZeit, gierWinkel, labyrinth) {
     // Z-Achse prüfen (mit aktualisiertem X, falls bewegt)
     if (!pruefeKollision(labyrinth, kamera.position.x, aktZ + dz)) {
         kamera.position.z = aktZ + dz;
+    }
+
+    // Auto-Walk Distanz tracken
+    if (autoWalkAktiv) {
+        const tatsaechlicheDist = Math.sqrt(dx * dx + dz * dz);
+        autoWalkDistanz += tatsaechlicheDist;
+
+        if (autoWalkDistanz >= AUTO_WALK_ZIEL || tatsaechlicheDist < 0.001) {
+            // Wenn Ziel erreicht ODER blockiert (tatsaechlicheDist fast 0) -> Nächste Phase
+            autoWalkDistanz = 0;
+            autoWalkPhase = (autoWalkPhase + 1) % 4;
+        }
     }
 }
 

@@ -322,64 +322,142 @@ export function buildMazeGeometry(scene, labyrinth) {
         }
     }
 
-    // ── Wand-Geometrie als InstancedMesh (Performance!) ──
+    // ── Wand-Geometrie (Shared Resources) ──
     const wandGeometrie = new THREE.BoxGeometry(WAND_GROESSE, WAND_HOEHE, WAND_GROESSE);
-    const wandMaterial = new THREE.MeshPhongMaterial({
-        map: wandTextur,
-        shininess: 0,
-        specular: 0x000000
+    const wandMaterial = new THREE.MeshLambertMaterial({
+        map: wandTextur
     });
-    const wandInstanzen = new THREE.InstancedMesh(wandGeometrie, wandMaterial, wandAnzahl);
-    wandInstanzen.castShadow = true;
-    wandInstanzen.receiveShadow = true;
-
-    const matrix = new THREE.Matrix4();
-    let index = 0;
 
     for (let y = 0; y < labyrinth.length; y++) {
         for (let x = 0; x < labyrinth[y].length; x++) {
             if (labyrinth[y][x] === 1) {
-                matrix.setPosition(
+                const wand = new THREE.Mesh(wandGeometrie, wandMaterial);
+                wand.position.set(
                     x * WAND_GROESSE,
                     WAND_HOEHE / 2,
                     y * WAND_GROESSE
                 );
-                wandInstanzen.setMatrixAt(index, matrix);
-                index++;
+                // WICHTIG: Kein Schattenwurf für Performance-Stabilität bei vielen Lichtern
+                wand.matrixAutoUpdate = false; // Statisch -> Performance-Boost
+                wand.updateMatrix();
+                scene.add(wand);
             }
         }
     }
-    wandInstanzen.instanceMatrix.needsUpdate = true;
-    scene.add(wandInstanzen);
 
-    // ── Boden ──
-    const bodenBreite = labyrinth[0].length * WAND_GROESSE;
-    const bodenTiefe = labyrinth.length * WAND_GROESSE;
-    const bodenGeometrie = new THREE.PlaneGeometry(bodenBreite, bodenTiefe);
-    bodenTextur.repeat.set(labyrinth[0].length / 2, labyrinth.length / 2);
-    const bodenMaterial = new THREE.MeshPhongMaterial({
-        map: bodenTextur,
-        shininess: 0,
-        specular: 0x000000
-    });
-    const boden = new THREE.Mesh(bodenGeometrie, bodenMaterial);
-    boden.rotation.x = -Math.PI / 2;
-    boden.position.set(bodenBreite / 2 - WAND_GROESSE / 2, 0, bodenTiefe / 2 - WAND_GROESSE / 2);
-    boden.receiveShadow = true;
-    scene.add(boden);
 
-    // ── Decke ──
-    const deckenMaterial = new THREE.MeshPhongMaterial({
-        color: DECKEN_FARBE,
-        shininess: 0,
-        specular: 0x000000
-    });
-    const decke = new THREE.Mesh(bodenGeometrie.clone(), deckenMaterial);
-    decke.rotation.x = Math.PI / 2;
-    decke.position.set(bodenBreite / 2 - WAND_GROESSE / 2, WAND_HOEHE, bodenTiefe / 2 - WAND_GROESSE / 2);
-    scene.add(decke);
+    // ── Boden & Decke (Segmentiert für Performance) ──
+    const segmentGroesse = 4; // Kacheln von 4x4 Zellen
+    const segmentGeometrie = new THREE.PlaneGeometry(WAND_GROESSE * segmentGroesse, WAND_GROESSE * segmentGroesse);
 
-    console.log(`[Labyrinth] ${wandAnzahl} Wände als InstancedMesh erstellt`);
+    const bodenMaterial = new THREE.MeshLambertMaterial({ map: bodenTextur });
+    const deckenMaterial = new THREE.MeshLambertMaterial({ color: DECKEN_FARBE });
+
+    for (let y = 0; y < labyrinth.length; y += segmentGroesse) {
+        for (let x = 0; x < labyrinth[0].length; x += segmentGroesse) {
+            // Boden-Teil
+            const bodenTeil = new THREE.Mesh(segmentGeometrie, bodenMaterial);
+            bodenTeil.rotation.x = -Math.PI / 2;
+            bodenTeil.position.set(
+                (x + segmentGroesse / 2 - 0.5) * WAND_GROESSE,
+                0,
+                (y + segmentGroesse / 2 - 0.5) * WAND_GROESSE
+            );
+            bodenTeil.matrixAutoUpdate = false;
+            bodenTeil.updateMatrix();
+            scene.add(bodenTeil);
+
+            // Decken-Teil
+            const deckenTeil = new THREE.Mesh(segmentGeometrie, deckenMaterial);
+            deckenTeil.rotation.x = Math.PI / 2;
+            deckenTeil.position.set(bodenTeil.position.x, WAND_HOEHE, bodenTeil.position.z);
+            deckenTeil.matrixAutoUpdate = false;
+            deckenTeil.updateMatrix();
+            scene.add(deckenTeil);
+        }
+    }
+
+    console.log(`[Labyrinth] ${wandAnzahl} Wände als Einzel-Meshes (Shared Geo) erstellt`);
+}
+
+/**
+ * Platziert statische Lichtquellen (Fackeln) an den Wänden des Labyrinths.
+ * @param {THREE.Scene} scene - Die Spielszene
+ * @param {number[][]} labyrinth - Das Labyrinth-Array
+ */
+export function addWallLights(scene, labyrinth) {
+    const lichtAbstand = 12; // Weniger Lichter = bessere Performance
+    let lichtZaehler = 0;
+
+    for (let y = 1; y < labyrinth.length - 1; y++) {
+        for (let x = 1; x < labyrinth[y].length - 1; x++) {
+            // Nur in Gängen platzieren
+            if (labyrinth[y][x] === 0) {
+                lichtZaehler++;
+
+                if (lichtZaehler >= lichtAbstand) {
+                    // Prüfe Nachbarzellen auf Wände
+                    const nachbarn = [
+                        { dx: 1, dz: 0, rot: Math.PI / 2 },  // Wand Rechts
+                        { dx: -1, dz: 0, rot: -Math.PI / 2 }, // Wand Links
+                        { dx: 0, dz: 1, rot: 0 },            // Wand Unten
+                        { dx: 0, dz: -1, rot: Math.PI }      // Wand Oben
+                    ];
+
+                    for (const n of nachbarn) {
+                        if (labyrinth[y + n.dz][x + n.dx] === 1) {
+                            // Wand gefunden! Hier eine Fackel platzieren
+                            platziereFackel(scene, x, y, n);
+                            lichtZaehler = 0; // Zähler zurücksetzen
+                            break; // Nur ein Licht pro Zelle
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Shared Resources für Fackeln (Vermeidet Hitches beim Laden)
+const halterGeo = new THREE.BoxGeometry(0.1, 0.2, 0.1);
+const halterMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+const kernGeo = new THREE.SphereGeometry(0.08, 8, 8);
+const kernMat = new THREE.MeshBasicMaterial({ color: 0xffaa44 });
+
+/**
+ * Hilfsfunktion zum Platzieren einer einzelnen Fackel.
+ */
+function platziereFackel(scene, rx, ry, nachbar) {
+    const x = rx * WAND_GROESSE;
+    const z = ry * WAND_GROESSE;
+    const h = WAND_HOEHE * 0.6; // Auf Augenhöhe
+
+    // 1. Fackel-Halterung
+    const halter = new THREE.Mesh(halterGeo, halterMat);
+
+
+    // Position an die Wand schieben
+    halter.position.set(
+        x + nachbar.dx * (WAND_GROESSE * 0.45),
+        h,
+        z + nachbar.dz * (WAND_GROESSE * 0.45)
+    );
+    scene.add(halter);
+
+    // 2. Glühender Kern (emissive)
+    const kern = new THREE.Mesh(kernGeo, kernMat);
+    kern.position.copy(halter.position);
+    kern.position.y += 0.15;
+    scene.add(kern);
+
+    // 3. Das eigentliche Licht
+    const licht = new THREE.PointLight(0xffaa44, 2.0, 8); // Leicht schwächer, weniger Reichweite
+    licht.decay = 2; // Physikalisches Abklingen
+    licht.position.copy(kern.position);
+    // Ein Stück weiter von der Wand wegziehen, damit sie schön beleuchtet wird
+    licht.position.x += nachbar.dx * -0.2;
+    licht.position.z += nachbar.dz * -0.2;
+    scene.add(licht);
 }
 
 // Exportiere Konstanten für andere Module
