@@ -130,6 +130,40 @@ function spielePickupSound() {
 }
 
 /**
+ * Erzeugt einen prozeduralen Sound für einen Treffer (wenn der Spieler getroffen wird).
+ * Tiefer, dumpfer Impact-Sound.
+ */
+function spieleTrefferSound() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    const zeit = audioCtx.currentTime;
+
+    // ── Oszillator: Tiefer Thud (150Hz → 40Hz) ──────────────
+    const osz = audioCtx.createOscillator();
+    osz.type = 'square';
+    osz.frequency.setValueAtTime(150, zeit);
+    osz.frequency.exponentialRampToValueAtTime(40, zeit + 0.2);
+
+    const gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.4, zeit);
+    gain.gain.exponentialRampToValueAtTime(0.01, zeit + 0.2);
+
+    // Tiefpass-Filter für dumpferen Sound
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 300;
+
+    osz.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osz.start(zeit);
+    osz.stop(zeit + 0.2);
+}
+
+/**
  * Initialisiert das Kampfsystem.
  * @param {THREE.Scene} scene - Die Spielszene
  * @param {THREE.Camera} kamera - Die Spieler-Kamera
@@ -260,6 +294,10 @@ export function schiessen(kamera, scene, aktuelleZeit) {
 
             if (spielerId) {
                 console.log(`[Kampf] TREFFER! Zone: ${headshot ? 'KOPF' : 'Körper'} | ID: ${spielerId}`);
+
+                // Hit-Marker am Fadenkreuz auslösen
+                triggereHitMarker();
+
                 return {
                     treffer: true,
                     spielerId: spielerId,
@@ -273,6 +311,23 @@ export function schiessen(kamera, scene, aktuelleZeit) {
 
     console.log('[Kampf] Kein Treffer');
     return { treffer: false, spielerId: null, punkt: null };
+}
+
+/**
+ * Löst die visuelle Trefferanzeige am Fadenkreuz aus.
+ */
+function triggereHitMarker() {
+    const crosshair = document.getElementById('crosshair');
+    if (crosshair) {
+        crosshair.classList.remove('hit');
+        void crosshair.offsetWidth; // Force Reflow für Neustart der Animation
+        crosshair.classList.add('hit');
+
+        // Klasse nach Animation wieder entfernen (0.2s Dauer)
+        setTimeout(() => {
+            crosshair.classList.remove('hit');
+        }, 200);
+    }
 }
 
 /**
@@ -415,6 +470,9 @@ export function empfangeSchaden(schaden) {
         overlay.style.opacity = '0.5';
         setTimeout(() => { overlay.style.opacity = '0'; }, 200);
     }
+
+    // Sound abspielen
+    spieleTrefferSound();
 
     // HUD aktualisieren
     updateLebenAnzeige();
