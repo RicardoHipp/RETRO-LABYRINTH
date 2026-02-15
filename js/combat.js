@@ -22,6 +22,7 @@ export const MAX_LEBEN = 100;           // Maximale Lebenspunkte
 export const SCHADEN_KOERPER = 15; // Schaden bei Körpertreffer
 export const SCHADEN_KOPF = 30;   // Schaden bei Headshot
 export const MAX_MUNITION = 20;         // Maximal 20 Schuss pro Spieler
+const EINSCHLAG_OFFSET = 0.5;   // Versatz der Lichtquelle vor der Wand (für bessere Sichtbarkeit)
 
 // ── Zustand ─────────────────────────────────────────────────
 let letzterSchussZeit = 0;
@@ -78,51 +79,65 @@ function getNoiseBuffer(ctx) {
  * Erzeugt einen prozeduralen Retro-Schuss-Sound via Web Audio API.
  */
 function spieleSchussSound() {
-    // console.log('[Audio] spieleSchussSound aufgerufen'); // Debug entfernt
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
 
     const zeit = audioCtx.currentTime;
 
-    // ── Master Gain für den gesamten Schuss (sauberer Mix) ────
+    // ── Master Gain (Sehr knackig) ──────────────────────────
     const masterGain = audioCtx.createGain();
-    masterGain.gain.setValueAtTime(0.5, zeit);
-    masterGain.gain.exponentialRampToValueAtTime(0.001, zeit + 0.2);
+    masterGain.gain.setValueAtTime(0.8, zeit);
+    masterGain.gain.exponentialRampToValueAtTime(0.001, zeit + 0.3); // Etwas länger für das "NG"
     masterGain.connect(audioCtx.destination);
 
-    // ── Oszillator: Laser-Sweep (800Hz → 150Hz) ─────────────
-    const oszillator = audioCtx.createOscillator();
-    oszillator.type = 'sawtooth';
-    oszillator.frequency.setValueAtTime(800, zeit);
-    oszillator.frequency.exponentialRampToValueAtTime(150, zeit + 0.15);
-
-    const oszGain = audioCtx.createGain();
-    oszGain.gain.setValueAtTime(0.3, zeit);
-    oszGain.gain.exponentialRampToValueAtTime(0.01, zeit + 0.15);
-
-    oszillator.connect(oszGain);
-    oszGain.connect(masterGain);
-    oszillator.start(zeit);
-    oszillator.stop(zeit + 0.15);
-
-    // ── Rausch-Burst ("Knall"-Effekt) ───────────────────────
+    // ── 1. Der "P"-Knall (Noise Burst) ──────────────────────
     const rauschQuelle = audioCtx.createBufferSource();
     rauschQuelle.buffer = getNoiseBuffer(audioCtx);
 
     const rauschGain = audioCtx.createGain();
-    rauschGain.gain.setValueAtTime(0.2, zeit);
-    rauschGain.gain.exponentialRampToValueAtTime(0.01, zeit + 0.08);
+    rauschGain.gain.setValueAtTime(0.7, zeit);
+    rauschGain.gain.exponentialRampToValueAtTime(0.001, zeit + 0.05);
 
-    const filter = audioCtx.createBiquadFilter();
-    filter.type = 'highpass';
-    filter.frequency.value = 1000;
+    const rauschFilter = audioCtx.createBiquadFilter();
+    rauschFilter.type = 'highpass';
+    rauschFilter.frequency.setValueAtTime(1200, zeit);
 
-    rauschQuelle.connect(filter);
-    filter.connect(rauschGain);
+    rauschQuelle.connect(rauschFilter);
+    rauschFilter.connect(rauschGain);
     rauschGain.connect(masterGain);
     rauschQuelle.start(zeit);
-    rauschQuelle.stop(zeit + 0.08);
+    rauschQuelle.stop(zeit + 0.05);
+
+    // ── 2. Das "E" (Mechanischer Punch / Sweep) ─────────────
+    const punch = audioCtx.createOscillator();
+    punch.type = 'triangle';
+    punch.frequency.setValueAtTime(450, zeit);
+    punch.frequency.exponentialRampToValueAtTime(60, zeit + 0.08);
+
+    const punchGain = audioCtx.createGain();
+    punchGain.gain.setValueAtTime(0.4, zeit);
+    punchGain.gain.exponentialRampToValueAtTime(0.01, zeit + 0.08);
+
+    punch.connect(punchGain);
+    punchGain.connect(masterGain);
+    punch.start(zeit);
+    punch.stop(zeit + 0.08);
+
+    // ── 3. Das "NG" (Metallische Resonanz) ──────────────────
+    const ring = audioCtx.createOscillator();
+    ring.type = 'sine';
+    ring.frequency.setValueAtTime(1400, zeit); // Typischer metallischer Oberton
+    ring.frequency.exponentialRampToValueAtTime(800, zeit + 0.2); // Fällt leicht ab
+
+    const ringGain = audioCtx.createGain();
+    ringGain.gain.setValueAtTime(0.15, zeit);
+    ringGain.gain.exponentialRampToValueAtTime(0.001, zeit + 0.25);
+
+    ring.connect(ringGain);
+    ringGain.connect(masterGain);
+    ring.start(zeit);
+    ring.stop(zeit + 0.25);
 }
 
 /**
@@ -196,23 +211,27 @@ export function initCombat(scene, kamera) {
 
     // 1. Mündungsfeuer (persistent)
     muzzleFlashLicht = new THREE.PointLight(0xffcc00, 0, 5);
+    muzzleFlashLicht.userData.persistent = true;
     scene.add(muzzleFlashLicht);
 
     const muzzleGeo = new THREE.SphereGeometry(0.12, 4, 4);
     const muzzleMat = new THREE.MeshBasicMaterial({ color: 0xffff00, transparent: true, opacity: 0 });
     muzzleFlashMesh = new THREE.Mesh(muzzleGeo, muzzleMat);
     muzzleFlashMesh.visible = false;
+    muzzleFlashMesh.userData.persistent = true;
     scene.add(muzzleFlashMesh);
 
     // 2. Objekt-Pooling Initialisierung
     // Wir erstellen die Lichter und Meshes vorab und verstecken sie
     for (let i = 0; i < LICHT_POOL_GROESSE; i++) {
         const licht = new THREE.PointLight(0xffaa00, 0, 6);
+        licht.userData.persistent = true;
         scene.add(licht);
         lichtPool.push(licht);
 
         const mesh = new THREE.Mesh(einschlagsGeometrie, materialFunken);
         mesh.visible = false;
+        mesh.userData.persistent = true;
         scene.add(mesh);
         einschlagMeshPool.push(mesh);
     }
@@ -221,6 +240,7 @@ export function initCombat(scene, kamera) {
     const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
     const laserMat = new THREE.LineBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0 });
     poolLaser = new THREE.Line(laserGeo, laserMat);
+    poolLaser.userData.persistent = true;
     scene.add(poolLaser);
 
     console.log('[Kampf] System initialisiert (Pooling aktiv)');
@@ -550,13 +570,13 @@ function erzeugeEinschlag(scene, punkt, normal = null, typ = 'SPARKS', schuetzen
     // Offset
     if (normal) {
         mesh.position.add(normal.clone().multiplyScalar(0.02));
-        licht.position.add(normal.clone().multiplyScalar(0.1));
+        licht.position.add(normal.clone().multiplyScalar(EINSCHLAG_OFFSET));
     } else {
         const refPos = schuetzenPos || (getKamera() ? getKamera().position : null);
         if (refPos) {
             const dir = new THREE.Vector3().subVectors(refPos, punkt).normalize();
             mesh.position.add(dir.clone().multiplyScalar(0.05));
-            licht.position.add(dir.multiplyScalar(0.12));
+            licht.position.add(dir.multiplyScalar(EINSCHLAG_OFFSET));
         }
     }
 
@@ -631,7 +651,6 @@ function updateCombat(deltaZeit, kamera) {
         if (strahlTimer <= 0) {
             entferneStrahl();
         } else {
-            // Opacity linear verringern
             const fortschritt = strahlTimer / STRAHL_DAUER;
             poolLaser.material.opacity = fortschritt;
         }

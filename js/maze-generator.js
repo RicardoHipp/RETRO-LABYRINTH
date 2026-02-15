@@ -161,61 +161,90 @@ function generiereWandMaterialPool(anzahl = 4) {
 
 
 /**
- * Erzeugt einen Pool von verschiedenen Boden-Materialien.
+ * Erzeugt einen Pool von verschiedenen Boden-Materialien (Große Steinplatten).
  * @param {number} anzahl - Wie viele Varianten
  * @returns {THREE.MeshPhongMaterial[]}
  */
 function generiereBodenMaterialPool(anzahl = 4) {
     const pool = [];
-    const res = 256; // Changed from 512 to 256
+    const res = 512; // Höhere Auflösung für Details
     for (let p = 0; p < anzahl; p++) {
         const canvas = document.createElement('canvas');
         canvas.width = res;
         canvas.height = res;
         const ctx = canvas.getContext('2d');
 
-        // Grundfarbe – einheitlicher, dunkler Beton
-        ctx.fillStyle = '#252525';
+        // Dunkler Untergrund (Fugenfarbe)
+        ctx.fillStyle = '#111111';
         ctx.fillRect(0, 0, res, res);
 
-        // Raster
-        ctx.strokeStyle = '#151515';
-        ctx.lineWidth = 2;
-        const gS = res / 2; // Gittergröße (256px)
-        for (let x = 0; x < res; x += gS) {
-            ctx.beginPath();
-            ctx.moveTo(x, 0); ctx.lineTo(x, res); ctx.stroke();
-        }
-        for (let y = 0; y < res; y += gS) {
-            ctx.beginPath();
-            ctx.moveTo(0, y); ctx.lineTo(res, y); ctx.stroke();
+        // Steine zeichnen (Großes, versetztes Muster)
+        const rows = 4;
+        const cols = 4;
+        const tileH = res / rows;
+        const tileW = res / cols;
+
+        for (let y = 0; y < rows; y++) {
+            // Versatz in jeder zweiten Reihe für Mauerwerk-Optik
+            const offsetX = (y % 2 === 0) ? 0 : tileW / 2;
+
+            for (let x = -1; x <= cols; x++) {
+                // Zufällige Variation der Steinfarbe
+                const baseGray = 30 + Math.random() * 20; // 30-50
+                ctx.fillStyle = `rgb(${baseGray}, ${baseGray}, ${baseGray})`;
+
+                // Fugen-Abstand
+                const gap = 4 + Math.random() * 3; // Unregelmäßige Fugenbreite
+
+                const drawX = x * tileW + offsetX + gap;
+                const drawY = y * tileH + gap;
+                const drawW = tileW - gap * 2;
+                const drawH = tileH - gap * 2;
+
+                if (drawX + drawW > 0 && drawX < res) {
+                    // Rechtecke zeichnen
+                    ctx.fillRect(drawX, drawY, drawW, drawH);
+
+                    // Highlights auf den Steinen (Struktur)
+                    for (let i = 0; i < 40; i++) {
+                        ctx.fillStyle = `rgba(255,255,255, ${0.05 + Math.random() * 0.05})`;
+                        const sx = drawX + Math.random() * drawW;
+                        const sy = drawY + Math.random() * drawH;
+                        const sw = Math.random() * (drawW / 2);
+                        const sh = Math.random() * (drawH / 5);
+                        ctx.fillRect(sx, sy, sw, sh);
+                    }
+                }
+            }
         }
 
-        // Schmutz
-        for (let i = 0; i < 2500; i++) { // Changed from 5000 to 2500
+        // Globales Rauschen für "Grit" (Sand/Dreck)
+        for (let i = 0; i < 8000; i++) {
             const x = Math.random() * res;
             const y = Math.random() * res;
-            const h = Math.floor(Math.random() * 15);
-            ctx.fillStyle = `rgba(${h}, ${h}, ${h}, 0.5)`;
-            ctx.fillRect(x, y, 1, 1); // Changed from 2,2 to 1,1
-
-            if (Math.random() < 0.04) {
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-                ctx.beginPath();
-                ctx.arc(x, y, Math.random() * 10, 0, Math.PI * 2); // Changed from 20 to 10
-                ctx.fill();
+            const noise = Math.random();
+            if (noise < 0.5) {
+                // Helle Pünktchen
+                ctx.fillStyle = 'rgba(100, 100, 100, 0.3)';
+            } else {
+                // Dunkle Pünktchen
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
             }
+            ctx.fillRect(x, y, 2, 2);
         }
 
         const textur = new THREE.CanvasTexture(canvas);
         textur.wrapS = THREE.RepeatWrapping;
         textur.wrapT = THREE.RepeatWrapping;
-        textur.repeat.set(4, 4); // 4x4 Zellen pro Segment
+        textur.repeat.set(4, 4);
         textur.magFilter = THREE.NearestFilter;
-        textur.minFilter = THREE.NearestFilter;
+        textur.minFilter = THREE.LinearMipmapLinearFilter; // Besseres Mipmapping für Boden
+
         pool.push(new THREE.MeshPhongMaterial({
             map: textur,
-            shininess: 10 // Etwas mehr Glanz für feuchten Boden
+            shininess: 15, // Etwas feucht
+            bumpMap: textur, // Textur auch als Bump-Map nutzen für Tiefe
+            bumpScale: 0.05
         }));
     }
     return pool;
@@ -452,6 +481,13 @@ export function buildMazeGeometry(scene, labyrinth) {
     const wandPool = generiereWandMaterialPool(4);
     const bodenPool = generiereBodenMaterialPool(4);
 
+    // Wand-Materialien für Gewölbe clonen (BackSide nötig, da wir von innen schauen)
+    const gewoelbePool = wandPool.map(mat => {
+        const m = mat.clone();
+        m.side = THREE.BackSide;
+        return m;
+    });
+
     // Alte wallGroup entfernen falls vorhanden
     if (wallGroup) {
         scene.remove(wallGroup);
@@ -478,7 +514,7 @@ export function buildMazeGeometry(scene, labyrinth) {
         }
     }
 
-    // ── 2. InstancedMesh für jede Material-Gruppe erstellen ──
+    // ── 2. InstancedMesh für jede Wand-Material-Gruppe erstellen ──
     const wandGeometrie = new THREE.BoxGeometry(WAND_GROESSE, WAND_HOEHE, WAND_GROESSE);
     let gesamtWandAnzahl = 0;
 
@@ -501,16 +537,14 @@ export function buildMazeGeometry(scene, labyrinth) {
         gesamtWandAnzahl += posListe.length;
     });
 
-    // ── 3. Boden & Decke (Merging hier optional, da viel weniger Instanzen) ──
+    // ── 3. BODEN (Große Steinplatten) ──
     const segmentGroesse = 4;
-    const segmentGeometrie = new THREE.PlaneGeometry(WAND_GROESSE * segmentGroesse, WAND_GROESSE * segmentGroesse);
-    const deckenPool = generiereDeckenMaterialPool(4);
-
+    const bodenGeometrie = new THREE.PlaneGeometry(WAND_GROESSE * segmentGroesse, WAND_GROESSE * segmentGroesse);
+    // Boden-Loop bleibt (aber ohne Decke!)
     for (let y = 0; y < labyrinth.length; y += segmentGroesse) {
         for (let x = 0; x < labyrinth[0].length; x += segmentGroesse) {
-            // Boden
             const bodenIdx = Math.floor(seededRandom() * bodenPool.length);
-            const bodenTeil = new THREE.Mesh(segmentGeometrie, bodenPool[bodenIdx]);
+            const bodenTeil = new THREE.Mesh(bodenGeometrie, bodenPool[bodenIdx]);
             bodenTeil.rotation.x = -Math.PI / 2;
             bodenTeil.rotation.z = Math.floor(seededRandom() * 4) * (Math.PI / 2);
             bodenTeil.position.set(
@@ -520,19 +554,344 @@ export function buildMazeGeometry(scene, labyrinth) {
             );
             bodenTeil.updateMatrix();
             wallGroup.add(bodenTeil);
-
-            // Decke
-            const deckenIdx = Math.floor(seededRandom() * deckenPool.length);
-            const deckenTeil = new THREE.Mesh(segmentGeometrie, deckenPool[deckenIdx]);
-            deckenTeil.rotation.x = Math.PI / 2;
-            deckenTeil.rotation.z = Math.floor(seededRandom() * 4) * (Math.PI / 2);
-            deckenTeil.position.set(bodenTeil.position.x, WAND_HOEHE, bodenTeil.position.z);
-            deckenTeil.updateMatrix();
-            wallGroup.add(deckenTeil);
         }
     }
 
-    console.log(`[Labyrinth] Optimierung abgeschlossen: ${gesamtWandAnzahl} Wände via Instancing in wallGroup merged.`);
+    // ── 4. DECKE (Modulares adaptives System - Schritt 3: Kurven-Integration) ──
+    const r = WAND_GROESSE / 2; // 1.0m
+    const deckenHoehe = WAND_HOEHE + r; // 4.0m
+    const qG = WAND_GROESSE / 2; // Quadrant-Größe = 1.0m
+
+    const plateGeo = new THREE.PlaneGeometry(qG, qG);
+    const edgeGeo = createQuarterCylinderGeometry(r, qG);
+
+    const platePosGruppen = Array.from({ length: gewoelbePool.length }, () => []);
+    const edgePosGruppen = Array.from({ length: gewoelbePool.length }, () => []);
+    const cornerPosGruppen = Array.from({ length: gewoelbePool.length }, () => []);
+    const outerCornerPosGruppen = Array.from({ length: gewoelbePool.length }, () => []);
+
+    const cornerGeo = createGroinCornerGeometry(r);
+    const outerCornerGeo = createOuterCornerGeometry(r);
+    for (let y = 0; y < labyrinth.length; y++) {
+        for (let x = 0; x < labyrinth[y].length; x++) {
+            if (labyrinth[y][x] === 0) {
+                const matIdx = Math.floor(seededRandom() * gewoelbePool.length);
+                const wx = x * WAND_GROESSE;
+                const wz = y * WAND_GROESSE;
+                const offset = qG / 2; // 0.5m
+
+                // Nachbarn (Array-Index: y=z, x=x)
+                const nN = (y === 0 || labyrinth[y - 1][x] === 1);
+                const nS = (y === labyrinth.length - 1 || labyrinth[y + 1][x] === 1);
+                const nW = (x === 0 || labyrinth[y][x - 1] === 1);
+                const nO = (x === labyrinth[0].length - 1 || labyrinth[y][x + 1] === 1);
+
+                // Diagonal-Check für Außenecken (Pfeiler)
+                const nNW = (y > 0 && x > 0 && labyrinth[y - 1][x - 1] === 1);
+                const nNO = (y > 0 && x < labyrinth[0].length - 1 && labyrinth[y - 1][x + 1] === 1);
+                const nSW = (y < labyrinth.length - 1 && x > 0 && labyrinth[y + 1][x - 1] === 1);
+                const nSO = (y < labyrinth.length - 1 && x < labyrinth[0].length - 1 && labyrinth[y + 1][x + 1] === 1);
+
+                // Quadranten-Logik [NW, NO, SW, SO]
+                const quadrants = [
+                    { dx: -offset, dz: -offset, w1: nN, w2: nW, diag: nNW, t1: "N", t2: "W" }, // NW
+                    { dx: offset, dz: -offset, w1: nN, w2: nO, diag: nNO, t1: "N", t2: "O" }, // NO
+                    { dx: -offset, dz: offset, w1: nS, w2: nW, diag: nSW, t1: "S", t2: "W" }, // SW
+                    { dx: offset, dz: offset, w1: nS, w2: nO, diag: nSO, t1: "S", t2: "O" }  // SO
+                ];
+
+                quadrants.forEach(q => {
+                    const px = wx + q.dx;
+                    const pz = wz + q.dz;
+
+                    if (q.w1 && q.w2) {
+                        // Innenecke (Zimmer-Ecke)
+                        let ry = 0;
+                        if (q.t1 === "N" && q.t2 === "W") ry = Math.PI;       // NW (180°)
+                        if (q.t1 === "N" && q.t2 === "O") ry = 0.5 * Math.PI; // NO (90°)
+                        if (q.t1 === "S" && q.t2 === "W") ry = 1.5 * Math.PI; // SW (270°)
+                        if (q.t1 === "S" && q.t2 === "O") ry = 0;             // SO (0°)
+
+                        cornerPosGruppen[matIdx].push({ x: wx, y: 3.0, z: wz, rx: 0, ry, rz: 0 });
+                    }
+                    else if (!q.w1 && !q.w2 && q.diag) {
+                        // Außenecke (Pfeiler-Ecke) - KONVEX
+                        let ry = 0;
+                        if (q.t1 === "N" && q.t2 === "W") ry = Math.PI;       // NW (180°)
+                        if (q.t1 === "N" && q.t2 === "O") ry = 0.5 * Math.PI; // NO (90°)
+                        if (q.t1 === "S" && q.t2 === "W") ry = 1.5 * Math.PI; // SW (270°)
+                        if (q.t1 === "S" && q.t2 === "O") ry = 0;             // SO (0°)
+
+                        outerCornerPosGruppen[matIdx].push({ x: wx, y: 3.0, z: wz, rx: 0, ry, rz: 0 });
+                    }
+                    else if (q.w1 && !q.w2) {
+                        // Nord/Süd Rundung (Achse X)
+                        let rx = 0, ry = (q.t1 === "N" ? Math.PI : 0), rz = Math.PI / 2;
+                        edgePosGruppen[matIdx].push({ x: px, y: 3.0, z: wz, rx, ry, rz });
+                    }
+                    else if (q.w2 && !q.w1) {
+                        // West/Ost Rundung (Achse Z)
+                        let rx = Math.PI / 2, ry = (q.t2 === "W" ? Math.PI : 0.5 * Math.PI), rz = 0;
+                        edgePosGruppen[matIdx].push({ x: wx, y: 3.0, z: pz, rx, ry, rz });
+                    }
+                    else {
+                        // Flach (Mitte oder Diagonale)
+                        platePosGruppen[matIdx].push({ x: px, y: deckenHoehe, z: pz, rx: -Math.PI / 2, ry: 0, rz: 0 });
+                    }
+                });
+            }
+        }
+    }
+
+    // Instancing Platten
+    platePosGruppen.forEach((liste, idx) => {
+        if (liste.length === 0) return;
+        const mesh = new THREE.InstancedMesh(plateGeo, gewoelbePool[idx], liste.length);
+        const dummy = new THREE.Object3D();
+        liste.forEach((p, i) => {
+            dummy.position.set(p.x, p.y, p.z);
+            dummy.rotation.set(p.rx, p.ry, p.rz);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(i, dummy.matrix);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        wallGroup.add(mesh);
+    });
+
+    // Instancing Wölbungen
+    edgePosGruppen.forEach((liste, idx) => {
+        if (liste.length === 0) return;
+        const mesh = new THREE.InstancedMesh(edgeGeo, gewoelbePool[idx], liste.length);
+        const dummy = new THREE.Object3D();
+        liste.forEach((p, i) => {
+            dummy.position.set(p.x, p.y, p.z);
+            dummy.rotation.set(p.rx, p.ry, p.rz);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(i, dummy.matrix);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        wallGroup.add(mesh);
+    });
+
+    // Instancing Ecken (NEU Schritt 4)
+    cornerPosGruppen.forEach((liste, idx) => {
+        if (liste.length === 0) return;
+        const mesh = new THREE.InstancedMesh(cornerGeo, gewoelbePool[idx], liste.length);
+        const dummy = new THREE.Object3D();
+        liste.forEach((p, i) => {
+            dummy.position.set(p.x, p.y, p.z);
+            dummy.rotation.set(p.rx, p.ry, p.rz);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(i, dummy.matrix);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        wallGroup.add(mesh);
+    });
+
+    // Instancing Außenecken (NEU Schritt 5)
+    outerCornerPosGruppen.forEach((liste, idx) => {
+        if (liste.length === 0) return;
+        const mesh = new THREE.InstancedMesh(outerCornerGeo, gewoelbePool[idx], liste.length);
+        const dummy = new THREE.Object3D();
+        liste.forEach((p, i) => {
+            dummy.position.set(p.x, p.y, p.z);
+            dummy.rotation.set(p.rx, p.ry, p.rz);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(i, dummy.matrix);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        wallGroup.add(mesh);
+    });
+
+    console.log(`[Labyrinth] Quadranten-Deckensystem mit Außenecken (Schritt 5) installiert.`);
+}
+
+/**
+ * Erstellt einen Viertel-Zylinder (90° Bogen) für die Deckenkanten.
+ * radius: Wölbungsradius (WAND_GROESSE / 2 = 1.0m)
+ * height: Länge des Segments (WAND_GROESSE / 2 = 1.0m für Quadranten)
+ */
+function createQuarterCylinderGeometry(radius, height) {
+    const segments = 16;
+    const geometry = new THREE.CylinderGeometry(radius, radius, height, segments, 1, true, 0, Math.PI / 2);
+    return geometry;
+}
+
+/**
+ * Erstellt eine Kreuzgewölbe-Eck-Geometrie (Groin Corner).
+ * Basiert auf dem Schnitt zweier Zylinder für nahtlose Übergänge.
+ */
+function createGroinCornerGeometry(radius) {
+    const segments = 16;
+    const geometry = new THREE.BufferGeometry();
+    const vertices = [];
+    const uvs = [];
+    const indices = [];
+
+    for (let i = 0; i <= segments; i++) {
+        const angleZ = (i / segments) * (Math.PI / 2);
+        const z = radius * Math.sin(angleZ);
+        for (let j = 0; j <= segments; j++) {
+            const angleX = (j / segments) * (Math.PI / 2);
+            const x = radius * Math.sin(angleX);
+
+            const rxVal = Math.max(0, radius * radius - x * x);
+            const rzVal = Math.max(0, radius * radius - z * z);
+            const y = Math.min(Math.sqrt(rxVal), Math.sqrt(rzVal));
+
+            vertices.push(x, y, z);
+            uvs.push(j / segments, i / segments);
+        }
+    }
+
+    for (let i = 0; i < segments; i++) {
+        for (let j = 0; j < segments; j++) {
+            const a = i * (segments + 1) + j;
+            const b = i * (segments + 1) + (j + 1);
+            const c = (i + 1) * (segments + 1) + j;
+            const d = (i + 1) * (segments + 1) + (j + 1);
+            indices.push(a, c, b);
+            indices.push(b, c, d);
+        }
+    }
+
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return geometry;
+}
+
+/**
+ * Erstellt eine konvexe Außeneck-Geometrie (Klostergewölbe-Stil) für Pfeiler.
+ */
+function createOuterCornerGeometry(radius) {
+    const segments = 16;
+    const geometry = new THREE.BufferGeometry();
+    const vertices = [];
+    const uvs = [];
+    const indices = [];
+
+    for (let i = 0; i <= segments; i++) {
+        const angleZ = (i / segments) * (Math.PI / 2);
+        const z = radius * Math.sin(angleZ);
+        for (let j = 0; j <= segments; j++) {
+            const angleX = (j / segments) * (Math.PI / 2);
+            const x = radius * Math.sin(angleX);
+
+            const rxVal = Math.max(0, radius * radius - x * x);
+            const rzVal = Math.max(0, radius * radius - z * z);
+            // Math.max erzeugt die konvexe Form (Klostergewölbe)
+            const y = Math.max(Math.sqrt(rxVal), Math.sqrt(rzVal));
+
+            vertices.push(x, y, z);
+            uvs.push(j / segments, i / segments);
+        }
+    }
+
+    for (let i = 0; i < segments; i++) {
+        for (let j = 0; j < segments; j++) {
+            const a = i * (segments + 1) + j;
+            const b = i * (segments + 1) + (j + 1);
+            const c = (i + 1) * (segments + 1) + j;
+            const d = (i + 1) * (segments + 1) + (j + 1);
+            indices.push(a, c, b);
+            indices.push(b, c, d);
+        }
+    }
+
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return geometry;
+}
+
+/**
+ * Erstellt eine Kreuzgewölbe-Geometrie (Groin Vault).
+ * y = max(sqrt(r²-x²), sqrt(r²-z²))
+ */
+function createGroinVaultGeometry(radius, size) {
+    const segments = 20;
+    const geometry = new THREE.BufferGeometry();
+    const vertices = [];
+    const uvs = [];
+    const indices = [];
+
+    const halfSize = size / 2;
+
+    for (let i = 0; i <= segments; i++) {
+        const z = (i / segments - 0.5) * size;
+        for (let j = 0; j <= segments; j++) {
+            const x = (j / segments - 0.5) * size;
+
+            // Höhe berechnen (Schnitt zweier Zylinder)
+            const rxVal = Math.max(0, radius * radius - x * x);
+            const rzVal = Math.max(0, radius * radius - z * z);
+            const y = Math.max(Math.sqrt(rxVal), Math.sqrt(rzVal));
+
+            vertices.push(x, y, z);
+
+            // UVs: Mapping für Brick-Textur
+            uvs.push(j / segments, i / segments);
+        }
+    }
+
+    // Indices (Quads -> Triangles)
+    // WICHTIG: Winding Order muss CCW für UP-facing Normals sein (damit BackSide beim Draufschauen von unten funktioniert)
+    // a(00) b(01)
+    // c(10) d(11)
+    // Wir brauchen Normals nach OBEN (y+).
+    // Vector a->c (+z), a->b (+x). Z cross X = +Y.
+    // Also Index Order: a, c, b !
+    // Indices (Quads -> Triangles)
+    // WICHTIG: Standard CCW für korrekte Face-Normals.
+    // Faces pointing UP/OUT.
+    // Indices (Quads -> Triangles)
+    // WICHTIG: a,c,b Order für korrekte Sichtbarkeit mit BackSide.
+    // Indices (Quads -> Triangles)
+    // STANDARD Order (CCW) -> Normals pointing OUT/UP.
+    // BackSide material will render the inside faces correctly.
+    // Indices (Quads -> Triangles)
+    // WICHTIG: a,c,b Order für korrekte Sichtbarkeit mit BackSide.
+    for (let i = 0; i < segments; i++) {
+        for (let j = 0; j < segments; j++) {
+            const a = i * (segments + 1) + j;
+            const b = i * (segments + 1) + (j + 1);
+            const c = (i + 1) * (segments + 1) + j;
+            const d = (i + 1) * (segments + 1) + (j + 1);
+
+            // Triangle 1: a, c, b
+            indices.push(a, c, b);
+            // Triangle 2: b, c, d
+            indices.push(b, c, d);
+        }
+    }
+
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return geometry;
+}
+
+/**
+ * Erstellt eine halbkreisförmige Wand (Lunette) zum Verschließen von Gewölbe-Enden.
+ */
+function createLunetteGeometry(radius) {
+    const segments = 32;
+    const geometry = new THREE.CircleGeometry(radius, segments, 0, Math.PI);
+
+    // Custom UVs für CircleGeometry fixen (damit Bricks gerade laufen)
+    const uvAttribute = geometry.attributes.uv;
+    for (let i = 0; i < uvAttribute.count; i++) {
+        const x = geometry.attributes.position.getX(i);
+        const y = geometry.attributes.position.getY(i);
+        const u = (x / radius + 1) / 2;
+        const v = (y / radius) / 2;
+        uvAttribute.setXY(i, u, v);
+    }
+    return geometry;
 }
 
 // Zustand für Fackeln

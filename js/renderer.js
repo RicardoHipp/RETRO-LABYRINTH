@@ -44,8 +44,8 @@ export function initRenderer() {
         // Szene selektiv leeren
         const zuEntfernen = [];
         scene.children.forEach(obj => {
-            // Kamera NIEMALS löschen/disposen
-            if (obj === kamera) return;
+            // Kamera und persistente Objekte (Pools) NIEMALS löschen/disposen
+            if (obj === kamera || (obj.userData && obj.userData.persistent)) return;
             zuEntfernen.push(obj);
         });
 
@@ -236,6 +236,7 @@ export function initPickupPools(targetScene) {
             const model = erstelleNeuesPickupModel(typ);
             model.visible = false;
             model.userData.active = false;
+            model.userData.persistent = true; // Schutz vor Scene-Cleanup
             model.position.set(0, -10, 0); // Unter der Welt
             targetScene.add(model);
             pickupPool[typ].push(model);

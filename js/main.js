@@ -55,7 +55,7 @@ const RADAR_INTERVALL = 5.0;    // Alle 5 Sekunden ein Update
 
 // Drosselung von unkritischen Systemen (Performance)
 let letztesMinimapUpdate = 0;
-const MINIMAP_FPS = 20; // 20 Updates pro Sekunde reichen völlig
+const MINIMAP_FPS = 5; // 20 Updates pro Sekunde reichen völlig
 let letztesPickupUpdate = 0;
 const PICKUP_FPS = 10;  // 10 Mal pro Sekunde prüfen reicht
 
@@ -119,8 +119,12 @@ function starteSpielMitSeed(seed, istHost) {
     // Shader Pre-compilation (verhindert Ruckler beim Loslaufen)
     prepareRenderer(scene, kamera);
 
-    // Spieler spawnen – Host an Position 0, Guest an Position weit entfernt
-    const spawnIndex = istHost ? 0 : Math.floor(LABYRINTH_BREITE * LABYRINTH_HOEHE * 0.8);
+    // Spieler spawnen – Dynamisch basierend auf Seed
+    const startShift = seed % 1000;
+    const hostIndex = startShift;
+    const guestIndex = startShift + Math.floor(LABYRINTH_BREITE * LABYRINTH_HOEHE * 0.4);
+
+    const spawnIndex = istHost ? hostIndex : guestIndex;
     const spawnPos = findeFreiePosition(labyrinth, spawnIndex);
     kamera.position.set(spawnPos.x, AUGEN_HOEHE, spawnPos.z);
     console.log(`[Spiel] Spieler gespawnt bei: (${spawnPos.x.toFixed(1)}, ${spawnPos.z.toFixed(1)})`);
