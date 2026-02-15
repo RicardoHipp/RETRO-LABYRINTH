@@ -13,7 +13,7 @@ import { WAND_HOEHE } from './maze-generator.js';
 const SICHTFELD = 75;            // Field of View in Grad
 const CLIP_NAH = 0.1;            // Nahe Clip-Ebene
 const CLIP_FERN = 50;            // Ferne Clip-Ebene
-const AUGEN_HOEHE = WAND_HOEHE * 0.7; // Kamera auf Augenhöhe (1.4 Einheiten)
+const AUGEN_HOEHE = WAND_HOEHE * 0.6; // Kamera auf Augenhöhe (1.4 Einheiten)
 
 // ── Blick-Empfindlichkeit ───────────────────────────────────
 const MAUS_EMPFINDLICHKEIT = 0.002;
@@ -200,6 +200,7 @@ export function erzeugeMunitionModel() {
 
     // Kleines Licht für das Pickup
     const licht = new THREE.PointLight(0x00ffff, 1, 2);
+    licht.castShadow = false; // Performance: Kein Schattenwurf für Pickups
     group.add(licht);
 
     aktivePickups.push(group);

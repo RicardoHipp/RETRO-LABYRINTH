@@ -12,7 +12,7 @@
  */
 
 // ── Konstanten ──────────────────────────────────────────────
-const WAND_HOEHE = 2.0;       // Höhe der Wände in Einheiten
+const WAND_HOEHE = 3.0;       // Höhe der Wände in Einheiten
 const WAND_GROESSE = 2.0;     // Breite/Tiefe einer Zelle
 const WAND_FARBE = 0x8B7355;  // Braun-grau (Retro-Stein)
 const BODEN_FARBE = 0x4a4a4a; // Dunkelgrau
@@ -324,7 +324,11 @@ export function buildMazeGeometry(scene, labyrinth) {
 
     // ── Wand-Geometrie als InstancedMesh (Performance!) ──
     const wandGeometrie = new THREE.BoxGeometry(WAND_GROESSE, WAND_HOEHE, WAND_GROESSE);
-    const wandMaterial = new THREE.MeshPhongMaterial({ map: wandTextur });
+    const wandMaterial = new THREE.MeshPhongMaterial({
+        map: wandTextur,
+        shininess: 0,
+        specular: 0x000000
+    });
     const wandInstanzen = new THREE.InstancedMesh(wandGeometrie, wandMaterial, wandAnzahl);
     wandInstanzen.castShadow = true;
     wandInstanzen.receiveShadow = true;
@@ -353,7 +357,11 @@ export function buildMazeGeometry(scene, labyrinth) {
     const bodenTiefe = labyrinth.length * WAND_GROESSE;
     const bodenGeometrie = new THREE.PlaneGeometry(bodenBreite, bodenTiefe);
     bodenTextur.repeat.set(labyrinth[0].length / 2, labyrinth.length / 2);
-    const bodenMaterial = new THREE.MeshPhongMaterial({ map: bodenTextur });
+    const bodenMaterial = new THREE.MeshPhongMaterial({
+        map: bodenTextur,
+        shininess: 0,
+        specular: 0x000000
+    });
     const boden = new THREE.Mesh(bodenGeometrie, bodenMaterial);
     boden.rotation.x = -Math.PI / 2;
     boden.position.set(bodenBreite / 2 - WAND_GROESSE / 2, 0, bodenTiefe / 2 - WAND_GROESSE / 2);
@@ -361,7 +369,11 @@ export function buildMazeGeometry(scene, labyrinth) {
     scene.add(boden);
 
     // ── Decke ──
-    const deckenMaterial = new THREE.MeshPhongMaterial({ color: DECKEN_FARBE });
+    const deckenMaterial = new THREE.MeshPhongMaterial({
+        color: DECKEN_FARBE,
+        shininess: 0,
+        specular: 0x000000
+    });
     const decke = new THREE.Mesh(bodenGeometrie.clone(), deckenMaterial);
     decke.rotation.x = Math.PI / 2;
     decke.position.set(bodenBreite / 2 - WAND_GROESSE / 2, WAND_HOEHE, bodenTiefe / 2 - WAND_GROESSE / 2);

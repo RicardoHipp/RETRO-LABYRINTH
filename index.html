@@ -19,8 +19,19 @@
     <!-- PeerJS via CDN (P2P-Verbindung) -->
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 
-    <!-- Stylesheet (mit Cache-Buster) -->
-    <link rel="stylesheet" href="css/style.css?v=1.1.2">
+    <!-- Version (Zentrale Stelle für Cache-Busting und UI) -->
+    <meta name="version" content="1.2.0">
+
+    <!-- Stylesheet (Dynamisch geladen für Cache-Busting) -->
+    <script>
+        (function () {
+            const v = document.querySelector('meta[name="version"]').content;
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = `css/style.css?v=${v}`;
+            document.head.appendChild(link);
+        })();
+    </script>
 
     <!-- Favicon (Inline-Base64 für schnellen Fix ohne Datei) -->
     <link rel="icon"
@@ -43,7 +54,7 @@
             <span>KLICK</span> Schießen<br>
             <span>ESC</span> Maus freigeben
         </div>
-        <div class="version-tag">v1.1.2 alpha</div>
+        <div id="version-display" class="version-tag">---</div>
     </div>
 
     <!-- ═════════════════════════════════════════════════════

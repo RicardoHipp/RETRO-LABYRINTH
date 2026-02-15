@@ -67,9 +67,13 @@ export class NetworkManager {
         /** @type {function|null} Callback für neue Pickups (Gast) */
         this.onNewPickup = null;
 
+        /** @type {function|null} Callback für gegnerische Schüsse */
+        this.onSchussEmpfangen = null;
+
         // Timer für regelmäßige Positions-Updates
         this._positionsTimer = null;
         this._letztePosition = null;
+        this._gesendetePosition = null; // Zuletzt tatsächlich gesendete Daten
 
         console.log('[Netzwerk] PeerJS NetworkManager erstellt');
     }
@@ -203,6 +207,12 @@ export class NetworkManager {
             case 'new_pickup':
                 if (this.onNewPickup) {
                     this.onNewPickup(nachricht.daten.id, nachricht.daten.pos);
+                }
+                break;
+
+            case 'schuss':
+                if (this.onSchussEmpfangen) {
+                    this.onSchussEmpfangen(nachricht.daten.start, nachricht.daten.ende);
                 }
                 break;
 
@@ -374,13 +384,34 @@ export class NetworkManager {
     startePositionsUpdates() {
         if (this._positionsTimer) return;
 
+        // Sofortiges erstes Update erzwingen, falls wir schon Daten haben
+        if (this._letztePosition && this.verbunden) {
+            this.sende('position', this._letztePosition);
+            this._gesendetePosition = { ...this._letztePosition };
+        }
+
         this._positionsTimer = setInterval(() => {
             if (this._letztePosition && this.verbunden) {
-                this.sende('position', this._letztePosition);
+                // Nur senden, wenn sich etwas geändert hat (Delta-Check)
+                if (this._hatSichBewegt(this._letztePosition, this._gesendetePosition)) {
+                    this.sende('position', this._letztePosition);
+                    this._gesendetePosition = { ...this._letztePosition };
+                }
             }
         }, POSITIONS_INTERVALL);
 
         console.log(`[Netzwerk] Positions-Updates gestartet (${POSITIONS_INTERVALL}ms Intervall)`);
+    }
+
+    /**
+     * Erwingt das sofortige Senden der aktuellen Position (ignoriert Delta-Check).
+     */
+    pusheAktuellePosition() {
+        if (this._letztePosition && this.verbunden) {
+            this.sende('position', this._letztePosition);
+            this._gesendetePosition = { ...this._letztePosition };
+            console.log('[Netzwerk] Position manuell gepusht');
+        }
     }
 
     /**
@@ -410,6 +441,18 @@ export class NetworkManager {
     }
 
     /**
+     * Sendet Schuss-Visuals an den Peer.
+     * @param {THREE.Vector3} start - Startpunkt des Schusses
+     * @param {THREE.Vector3} ende - Endpunkt des Schusses
+     */
+    sendeSchuss(start, ende) {
+        this.sende('schuss', {
+            start: { x: start.x, y: start.y, z: start.z },
+            ende: { x: ende.x, y: ende.y, z: ende.z }
+        });
+    }
+
+    /**
      * Registriert einen Callback für eingehende Treffer.
      * @param {function} callback - Wird aufgerufen mit {schaden}
      */
@@ -433,7 +476,29 @@ export class NetworkManager {
         }
         this.verbunden = false;
         this._setzeStatus('OFFLINE', false);
+        this._gesendetePosition = null;
         console.log('[Netzwerk] Verbindung getrennt und aufgeräumt');
+    }
+
+    /**
+     * Prüft ob eine signifikante Bewegung vorliegt.
+     * @private
+     */
+    _hatSichBewegt(neu, alt) {
+        if (!alt) return true;
+
+        // Toleranzschwellen (sehr klein, um Präzision zu wahren)
+        const posThreshold = 0.01;
+        const rotThreshold = 0.005;
+
+        const dX = Math.abs(neu.x - alt.x);
+        const dY = Math.abs(neu.y - alt.y);
+        const dZ = Math.abs(neu.z - alt.z);
+        const dRotY = Math.abs(neu.rotY - alt.rotY);
+        const dRotX = Math.abs(neu.rotX - alt.rotX);
+
+        return dX > posThreshold || dY > posThreshold || dZ > posThreshold ||
+            dRotY > rotThreshold || dRotX > rotThreshold;
     }
 
     /**

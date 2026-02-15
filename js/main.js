@@ -17,7 +17,7 @@
 import { generateMaze, buildMazeGeometry, findeFreiePosition, generiereZufallsSeed, WAND_GROESSE } from './maze-generator.js';
 import { initInput, getLookDelta, bewegeSpieler, verbrauchSchuss } from './input-handler.js';
 import { initRenderer, updateKameraRotation, getGierWinkel, updateSpielerLicht, renderFrame, getKamera, getScene, getRenderer, AUGEN_HOEHE, erzeugeMunitionModel, entfernePickupModel } from './renderer.js';
-import { initCombat, schiessen, updateCombat, registriereZiel, entferneZiel, entferneAlleZiele, empfangeSchaden, updateLebenAnzeige, resetLeben, addMunition, updateMunitionAnzeige, resetMunition, getMunition, MAX_MUNITION } from './combat.js';
+import { initCombat, schiessen, updateCombat, registriereZiel, entferneZiel, entferneAlleZiele, empfangeSchaden, updateLebenAnzeige, resetLeben, addMunition, updateMunitionAnzeige, resetMunition, getMunition, MAX_MUNITION, triggereSchussVisuals } from './combat.js';
 import { NetworkManager } from './network-manager.js';
 
 // ── Spiel-Einstellungen ─────────────────────────────────────
@@ -48,9 +48,14 @@ let eigenePunkte = 0;
 let gegnerPunkte = 0;
 
 // ── Minimap ─────────────────────────────────────────────────
+const MINIMAP_ZELLGROESSE = 5;
 let minimapCanvas = null;
 let minimapCtx = null;
-const MINIMAP_ZELLGROESSE = 4;
+let minimapBackgroundCanvas = null; // NEU: Cache für statischen Hintergrund
+let minimapBackgroundCtx = null;
+
+// Pool für häufig genutzte Objekte (Performance)
+const bodenPosTemp = new THREE.Vector3();
 
 /**
  * Initialisiert die Grundsysteme (Three.js etc.) OHNE Labyrinth.
@@ -122,6 +127,11 @@ function starteSpielMitSeed(seed, istHost) {
     // Positions-Updates starten
     netzwerk.startePositionsUpdates();
 
+    // Initiale Position sofort einmal erzwingen
+    const bodenPos = new THREE.Vector3(kamera.position.x, 0, kamera.position.z);
+    netzwerk.sendPlayerPosition(bodenPos, kamera.rotation);
+    netzwerk.pusheAktuellePosition();
+
     spielGestartet = true;
     console.log('[Spiel] ✅ Spiel gestartet! Ist Host:', istHost);
 }
@@ -171,6 +181,7 @@ function erstelleGegnerMesh() {
     const waffeGeometrie = new THREE.BoxGeometry(0.1, 0.1, 0.5);
     const waffeMaterial = new THREE.MeshLambertMaterial({ color: 0x777777 });
     const waffe = new THREE.Mesh(waffeGeometrie, waffeMaterial);
+    waffe.name = 'weapon'; // Name hinzugefügt für einfache Suche
     waffe.position.set(0.35, 1.1, -0.3); // Rechts vorne positionieren
     gegnerMesh.add(waffe);
 
@@ -200,7 +211,8 @@ function spawnMunitionPacks(seed) {
 
     const anzahl = 6; // Starten mit 6 Packs
     for (let i = 0; i < anzahl; i++) {
-        spawnEinzelnesPickup(seededRandom);
+        // Initial-Packs werden durch Seed bei beiden lokal erstellt, NICHT senden
+        spawnEinzelnesPickup(seededRandom, `ammo_init_${i}`, false);
     }
     console.log(`[Spiel] ${anzahl} Munitionspacks zum Start gespawnt`);
 }
@@ -208,16 +220,18 @@ function spawnMunitionPacks(seed) {
 /**
  * Spawnt ein einzelnes Munitionspack an einer zufälligen freien Stelle.
  * @param {function} randomFunc - Optionale Zufallsfunktion
+ * @param {string} vorgabeId - Optionale ID (für deterministische Start-Pakete)
+ * @param {boolean} sollSenden - Ob der Gast via Netzwerk informiert werden soll
  */
-function spawnEinzelnesPickup(randomFunc = Math.random) {
+function spawnEinzelnesPickup(randomFunc = Math.random, vorgabeId = null, sollSenden = true) {
     const scene = getScene();
     if (!scene) return null;
 
     const randIdx = Math.floor(randomFunc() * LABYRINTH_BREITE * LABYRINTH_HOEHE);
     const pos = findeFreiePosition(labyrinth, randIdx);
 
-    // Eindeutige ID generieren
-    const id = `ammo_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    // Eindeutige ID generieren (vorgegeben oder dynamisch)
+    const id = vorgabeId || `ammo_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
     const model = erzeugeMunitionModel();
     model.position.set(pos.x, 0.5, pos.z);
@@ -229,8 +243,8 @@ function spawnEinzelnesPickup(randomFunc = Math.random) {
         model: model
     });
 
-    // Wenn Host: Gast informieren
-    if (netzwerk && netzwerk.istHost && netzwerk.verbunden) {
+    // Wenn Host: Gast informieren (nur bei dynamischen Respawns nötig)
+    if (sollSenden && netzwerk && netzwerk.istHost && netzwerk.verbunden) {
         netzwerk.sende('new_pickup', { id, pos });
     }
 
@@ -322,9 +336,21 @@ function entferneGegnerMesh() {
 // ═══════════════════════════════════════════════════════════
 
 /**
+ * Liest die Version aus dem Meta-Tag und aktualisiert die UI.
+ */
+function initVersionUI() {
+    const meta = document.querySelector('meta[name="version"]');
+    const display = document.getElementById('version-display');
+    if (meta && display) {
+        display.textContent = `v${meta.content} alpha`;
+    }
+}
+
+/**
  * Initialisiert die gesamte Lobby-UI und Event-Handler.
  */
 function initLobby() {
+    initVersionUI(); // Version synchronisieren
     const startScreen = document.getElementById('start-screen');
     const lobbyScreen = document.getElementById('lobby-screen');
     const startButton = document.getElementById('start-button');
@@ -383,8 +409,39 @@ function initLobby() {
             const code = await netzwerk.erstelleRaum();
             codeAnzeige.style.display = 'block';
             codeText.textContent = code;
-            lobbyStatus.textContent = 'Warte auf Mitspieler...';
-            lobbyStatus.className = 'lobby-status warten';
+
+            // In Zwischenablage kopieren (mit Fallback für nicht-HTTPS Umgebungen)
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(code);
+                    lobbyStatus.textContent = 'Raum erstellt & Code kopiert! 🎉';
+                    console.log('[Netzwerk] Code via Clipboard-API kopiert');
+                } else {
+                    // FALLBACK: Veraltete Methode für file:// oder http:// ohne SSL
+                    const textArea = document.createElement("textarea");
+                    textArea.value = code;
+                    textArea.style.position = "fixed"; // Versteckt ausführen
+                    textArea.style.left = "-9999px";
+                    textArea.style.top = "0";
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    const erfolgreich = document.execCommand('copy');
+                    document.body.removeChild(textArea);
+
+                    if (erfolgreich) {
+                        lobbyStatus.textContent = 'Raum erstellt & Code kopiert! 🎉';
+                        console.log('[Netzwerk] Code via Fallback kopiert');
+                    } else {
+                        lobbyStatus.textContent = 'Raum erstellt! (Bitte manuell kopieren)';
+                    }
+                }
+            } catch (clipErr) {
+                console.warn('[Netzwerk] Clipboard-Fehler:', clipErr);
+                lobbyStatus.textContent = 'Raum erstellt! (Fehler beim Kopieren)';
+            }
+
+            lobbyStatus.className = 'lobby-status verbunden';
 
             // Seed generieren
             spielSeed = generiereZufallsSeed();
@@ -490,11 +547,20 @@ function richteNetzwerkCallbacks() {
     // Gegner-Position empfangen
     netzwerk.onUpdateEnemyPosition((daten) => {
         if (gegnerMesh) {
-            // Sanfte Interpolation
-            gegnerMesh.position.lerp(
-                new THREE.Vector3(daten.x, daten.y, daten.z),
-                0.3
-            );
+            const zielPos = new THREE.Vector3(daten.x, daten.y, daten.z);
+
+            // Wenn der Gegner noch unsichtbar ist oder sehr weit weg (Teleport/Start), 
+            // setzen wir ihn SOFORT an die Position statt zu gleiten (lerp).
+            const distanz = gegnerMesh.position.distanceTo(zielPos);
+
+            if (!gegnerMesh.visible || distanz > 3.0) {
+                gegnerMesh.position.copy(zielPos);
+                console.log(`[Netzwerk] Gegner-Teleport nach (${daten.x}, ${daten.z})`);
+            } else {
+                // Sanfte Interpolation für normale Bewegung
+                gegnerMesh.position.lerp(zielPos, 0.3);
+            }
+
             gegnerMesh.rotation.y = daten.rotY || 0;
             gegnerMesh.visible = true;
         }
@@ -523,6 +589,26 @@ function richteNetzwerkCallbacks() {
     // Neue Munitionspacks empfangen (nur Gast)
     netzwerk.onNewPickup = (id, pos) => {
         spawnNetzwerkPickup(id, pos);
+    };
+
+    // Schüsse empfangen
+    netzwerk.onSchussEmpfangen = (start, ende) => {
+        const scene = getScene();
+        let muzzlePos = start;
+
+        // Wenn der Gegner existiert, holen wir die Position direkt von seiner Waffe
+        // Das ist viel präziser als es mathematisch zu raten
+        if (gegnerMesh) {
+            const waffe = gegnerMesh.children.find(c => c.name === 'weapon');
+            if (waffe) {
+                // Die Mündung ist am vorderen Ende der Waffe (Laufende bei z = -0.25 relativ zum Box-Zentrum)
+                const tempPos = new THREE.Vector3(0, 0, -0.25);
+                waffe.localToWorld(tempPos);
+                muzzlePos = tempPos;
+            }
+        }
+
+        triggereSchussVisuals(scene, muzzlePos, ende);
     };
 
     // WICHTIG: Neuen Seed für Runden-Neustart empfangen (nur Gast)
@@ -685,6 +771,12 @@ function gameLoop() {
     // ── 3. Schuss prüfen ────────────────────────────────────
     if (rundeAktiv && verbrauchSchuss()) {
         const ergebnis = schiessen(kamera, scene, aktuelleZeit);
+
+        // Schuss ans Netzwerk senden (Visuals für den Gegner)
+        if (netzwerk.verbunden && ergebnis.strahlStart && ergebnis.strahlEnde) {
+            netzwerk.sendeSchuss(ergebnis.strahlStart, ergebnis.strahlEnde);
+        }
+
         if (ergebnis.treffer) {
             // Schaden senden, den wir in combat.js berechnet haben (Headshot-Support)
             netzwerk.sendHit(ergebnis.spielerId, ergebnis.schaden);
@@ -707,8 +799,9 @@ function gameLoop() {
 
     // ── 5. Netzwerk: Position senden ────────────────────────
     // Wir senden die Bodenposition (Y=0), nicht die Kamerahöhe!
-    const bodenPos = new THREE.Vector3(kamera.position.x, 0, kamera.position.z);
-    netzwerk.sendPlayerPosition(bodenPos, kamera.rotation);
+    // Nutze Temp-Objekt um Allokation zu vermeiden
+    bodenPosTemp.set(kamera.position.x, 0, kamera.position.z);
+    netzwerk.sendPlayerPosition(bodenPosTemp, kamera.rotation);
 
     // ── 6. Spieler-Licht aktualisieren ──────────────────────
     updateSpielerLicht();
@@ -727,24 +820,37 @@ function gameLoop() {
 function initMinimap() {
     minimapCanvas = document.getElementById('minimap');
     if (!minimapCanvas || !labyrinth) return;
-    minimapCanvas.width = labyrinth[0].length * MINIMAP_ZELLGROESSE;
-    minimapCanvas.height = labyrinth.length * MINIMAP_ZELLGROESSE;
+
+    const w = labyrinth[0].length * MINIMAP_ZELLGROESSE;
+    const h = labyrinth.length * MINIMAP_ZELLGROESSE;
+
+    minimapCanvas.width = w;
+    minimapCanvas.height = h;
     minimapCtx = minimapCanvas.getContext('2d');
+
+    // Hintergrund-Cache erstellen
+    minimapBackgroundCanvas = document.createElement('canvas');
+    minimapBackgroundCanvas.width = w;
+    minimapBackgroundCanvas.height = h;
+    minimapBackgroundCtx = minimapBackgroundCanvas.getContext('2d');
+
+    // Einmalig das Labyrinth in den Cache zeichnen
+    for (let y = 0; y < labyrinth.length; y++) {
+        for (let x = 0; x < labyrinth[y].length; x++) {
+            minimapBackgroundCtx.fillStyle = labyrinth[y][x] === 1 ? '#555' : '#222';
+            minimapBackgroundCtx.fillRect(x * MINIMAP_ZELLGROESSE, y * MINIMAP_ZELLGROESSE, MINIMAP_ZELLGROESSE, MINIMAP_ZELLGROESSE);
+        }
+    }
+    console.log('[Minimap] Hintergrund-Cache erstellt');
 }
 
 function zeichneMinimap(kamera) {
-    if (!minimapCtx || !labyrinth) return;
+    if (!minimapCtx || !minimapBackgroundCanvas) return;
     const ctx = minimapCtx;
     const z = MINIMAP_ZELLGROESSE;
 
-    ctx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
-
-    for (let y = 0; y < labyrinth.length; y++) {
-        for (let x = 0; x < labyrinth[y].length; x++) {
-            ctx.fillStyle = labyrinth[y][x] === 1 ? '#555' : '#222';
-            ctx.fillRect(x * z, y * z, z, z);
-        }
-    }
+    // 1. Hintergrund aus Cache kopieren (Konstante Zeit, sehr schnell!)
+    ctx.drawImage(minimapBackgroundCanvas, 0, 0);
 
     // Spieler (grün)
     const sX = (kamera.position.x / WAND_GROESSE + 0.5);
@@ -784,42 +890,44 @@ function zeichneMinimap(kamera) {
             }
         }
 
-        // Radar-Punkt zeichnen
-        const gX = (gegnerRadarPos.x / WAND_GROESSE + 0.5);
-        const gZ = (gegnerRadarPos.z / WAND_GROESSE + 0.5);
+        // Radar-Punkt zeichnen (nur wenn bereits ein Ping vorliegt)
+        if (gegnerRadarPos) {
+            const gX = (gegnerRadarPos.x / WAND_GROESSE + 0.5);
+            const gZ = (gegnerRadarPos.z / WAND_GROESSE + 0.5);
 
-        ctx.fillStyle = '#ff4444';
-        ctx.beginPath();
-        ctx.arc(gX * z, gZ * z, 3, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Visueller Ping-Effekt (Aufleuchten direkt nach Update)
-        const zeitSeitPing = aktuelleZeit - letzterRadarPingZeit;
-        const PING_EFFEKT_DAUER = 1.5; // Wie lange es leuchtet
-
-        if (zeitSeitPing < PING_EFFEKT_DAUER) {
-            const fortschritt = zeitSeitPing / PING_EFFEKT_DAUER;
-            const radius = 3 + fortschritt * 12; // Ring wird größer
-            const opacity = 1.0 - fortschritt;    // Ring verblasst
-
-            ctx.strokeStyle = `rgba(255, 68, 68, ${opacity})`;
-            ctx.lineWidth = 2;
+            ctx.fillStyle = '#ff4444';
             ctx.beginPath();
-            ctx.arc(gX * z, gZ * z, radius, 0, Math.PI * 2);
-            ctx.stroke();
-
-            // Zusätzlicher Blitz/Leuchten des Kerns
-            ctx.fillStyle = `rgba(255, 200, 200, ${opacity * 0.5})`;
-            ctx.beginPath();
-            ctx.arc(gX * z, gZ * z, 5, 0, Math.PI * 2);
+            ctx.arc(gX * z, gZ * z, 3, 0, Math.PI * 2);
             ctx.fill();
-        } else {
-            // Normaler feiner Ring im statischen Zustand
-            ctx.strokeStyle = 'rgba(255, 68, 68, 0.3)';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.arc(gX * z, gZ * z, 5, 0, Math.PI * 2);
-            ctx.stroke();
+
+            // Visueller Ping-Effekt (Aufleuchten direkt nach Update)
+            const zeitSeitPing = aktuelleZeit - letzterRadarPingZeit;
+            const PING_EFFEKT_DAUER = 1.5; // Wie lange es leuchtet
+
+            if (zeitSeitPing < PING_EFFEKT_DAUER) {
+                const fortschritt = zeitSeitPing / PING_EFFEKT_DAUER;
+                const radius = 3 + fortschritt * 12; // Ring wird größer
+                const opacity = 1.0 - fortschritt;    // Ring verblasst
+
+                ctx.strokeStyle = `rgba(255, 68, 68, ${opacity})`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(gX * z, gZ * z, radius, 0, Math.PI * 2);
+                ctx.stroke();
+
+                // Zusätzlicher Blitz/Leuchten des Kerns
+                ctx.fillStyle = `rgba(255, 200, 200, ${opacity * 0.5})`;
+                ctx.beginPath();
+                ctx.arc(gX * z, gZ * z, 5, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                // Normaler feiner Ring im statischen Zustand
+                ctx.strokeStyle = 'rgba(255, 68, 68, 0.3)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(gX * z, gZ * z, 5, 0, Math.PI * 2);
+                ctx.stroke();
+            }
         }
     }
 }

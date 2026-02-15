@@ -226,24 +226,19 @@ export function schiessen(kamera, scene, aktuelleZeit) {
         setTimeout(() => { flashElement.style.opacity = '0'; }, 80);
     }
 
-    // Raycast von Bildschirmmitte nach vorn (rekursiv für Headshots)
+    // Raycast von Bildschirmmitte nach vorn
     raycaster.setFromCamera(new THREE.Vector2(0, 0), kamera);
-    console.log(`[Kampf] Schuss von ${kamera.position.x.toFixed(1)}, ${kamera.position.z.toFixed(1)} | Ziele in Liste: ${ziele.length}`);
-
-    // Debug: Ziele prüfen
-    ziele.forEach(z => {
-        console.log(` - Ziel: ${z.name || 'Unnamed'}, Sichtbar: ${z.visible}, Pos: ${z.position.x.toFixed(1)}, ${z.position.z.toFixed(1)}`);
-    });
-
     const trefferPoints = raycaster.intersectObjects(ziele, true);
 
-    // Endpunkt des Strahls bestimmen (Wand oder max. Reichweite)
-    const wandRaycaster = new THREE.Raycaster();
+    // Wall-Raycaster konfigurieren
     wandRaycaster.ray.origin.copy(kamera.position);
     wandRaycaster.ray.direction.copy(raycaster.ray.direction);
     wandRaycaster.near = 0.1;
     wandRaycaster.far = SCHUSS_REICHWEITE;
-    const alleWandTreffer = wandRaycaster.intersectObjects(scene.children, true);
+
+    // Nur gegen Wände und andere statische Szene-Teile (keine Spieler/Lichter)
+    // Wir suchen gezielt nach dem InstancedMesh oder der Group der Wände
+    const alleWandTreffer = wandRaycaster.intersectObjects(scene.children, true).filter(h => h.object.type !== 'PointLight' && h.object.type !== 'Group');
 
     // Startpunkt: leicht vor der Kamera
     const strahlStart = kamera.position.clone();
@@ -258,8 +253,8 @@ export function schiessen(kamera, scene, aktuelleZeit) {
         strahlEnde = strahlStart.clone().add(richtung.multiplyScalar(SCHUSS_REICHWEITE));
     }
 
-    // Laserstrahl erzeugen
-    erzeugeStrahl(scene, strahlStart, strahlEnde);
+    // 3D-Mündungsfeuer für den Spieler selbst deaktiviert (nur HUD-Overlay nutzen)
+    // erzeuge3DMuendungsfeuer(scene, strahlStart);
 
     // Einschlag am Endpunkt (Wand) erzeugen
     if (alleWandTreffer.length > 0) {
@@ -313,14 +308,21 @@ export function schiessen(kamera, scene, aktuelleZeit) {
                     spielerId: spielerId,
                     punkt: hit.point,
                     schaden: schaden,
-                    headshot: headshot
+                    headshot: headshot,
+                    strahlStart: strahlStart,
+                    strahlEnde: strahlEnde
                 };
             }
         }
     }
 
-    console.log('[Kampf] Kein Treffer');
-    return { treffer: false, spielerId: null, punkt: null };
+    return {
+        treffer: false,
+        spielerId: null,
+        punkt: null,
+        strahlStart: strahlStart,
+        strahlEnde: strahlEnde
+    };
 }
 
 /**
@@ -453,7 +455,58 @@ function erzeugeEinschlag(scene, punkt, normal = null) {
 }
 
 /**
- * Aktualisiert den Kampfzustand (Muzzle-Flash, Laserstrahl).
+ * Trigger Schuss-Visuals für gegnerische Schüsse (aus Netzwerk).
+ * @param {THREE.Scene} scene 
+ * @param {object} start - {x, y, z}
+ * @param {object} ende - {x, y, z}
+ */
+export function triggereSchussVisuals(scene, start, ende) {
+    const vStart = new THREE.Vector3(start.x, start.y, start.z);
+    const vEnde = new THREE.Vector3(start.x, start.y, start.z).clone(); // Fallback
+
+    // Wir konvertieren die Objekte in Vector3
+    const s = new THREE.Vector3(start.x, start.y, start.z);
+    const e = new THREE.Vector3(ende.x, ende.y, ende.z);
+
+    spieleSchussSound();
+
+    // Die Position 'start' wird jetzt bereits in main.js präzise 
+    // an der Waffenmündung des Gegners berechnet. Hier nutzen wir sie direkt.
+    const muzzlePos = new THREE.Vector3(start.x, start.y, start.z);
+    erzeuge3DMuendungsfeuer(scene, muzzlePos);
+
+    erzeugeEinschlag(scene, e);
+}
+
+/**
+ * Erzeugt einen kurzen 3D-Lichtblitz (Mündungsfeuer) an einer Position.
+ * @param {THREE.Scene} scene 
+ * @param {THREE.Vector3} position 
+ */
+function erzeuge3DMuendungsfeuer(scene, position) {
+    // Temporäres Licht für den Blitz
+    const licht = new THREE.PointLight(0xffcc00, 3, 2);
+    licht.position.copy(position);
+    scene.add(licht);
+
+    // Visueller Kern des Blitzes
+    const geometrie = new THREE.SphereGeometry(0.12, 4, 4);
+    const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+    const blitz = new THREE.Mesh(geometrie, material);
+    blitz.position.copy(position);
+    scene.add(blitz);
+
+    setTimeout(() => {
+        scene.remove(licht);
+        scene.remove(blitz);
+        geometrie.dispose();
+        material.dispose();
+        licht.dispose();
+    }, 60);
+}
+
+/**
+ * Aktualisiert den Kampfzustand (Muzzle-Flash).
  * @param {number} deltaZeit - Vergangene Zeit seit letztem Frame
  * @param {THREE.Camera} kamera - Die Spieler-Kamera
  */
@@ -467,7 +520,7 @@ export function updateCombat(deltaZeit, kamera) {
         }
     }
 
-    // Laserstrahl verblassen lassen
+    // Laserstrahl Logik (deaktiviert)
     if (aktuellerStrahl) {
         strahlTimer -= deltaZeit;
         if (strahlTimer <= 0) {
