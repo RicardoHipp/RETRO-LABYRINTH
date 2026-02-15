@@ -10,6 +10,7 @@
  * ============================================================
  */
 
+import { istWand, WAND_GROESSE, wallGroup } from './maze-generator.js';
 import { getKamera } from './renderer.js';
 
 // ── Kampf-Einstellungen ─────────────────────────────────────
@@ -31,7 +32,6 @@ let leben = MAX_LEBEN;
 let munition = 10;
 
 // Laserstrahl-Zustand
-let aktuellerStrahl = null;      // Aktuelles THREE.Line Objekt
 let strahlTimer = 0;             // Verbleibende Sichtbarkeit
 let strahlScene = null;          // Referenz auf die Scene für Aufräumen
 
@@ -51,6 +51,13 @@ let audioCtx = null;
 
 // Statischer Rausch-Buffer für Schüsse (Performance & Konsistenz)
 let noiseBuffer = null;
+
+// ── Performance-Pooling (Gegen Schuss-Hitch) ──────────────────
+const LICHT_POOL_GROESSE = 10;
+const lichtPool = [];
+const einschlagMeshPool = [];
+let poolLaser = null;
+let muzzleFlashMesh = null; // NEU: Pooling für Mündungsfeuer
 
 /**
  * Erzeugt einen Buffer für weißes Rauschen.
@@ -184,7 +191,43 @@ function spieleTrefferSound() {
  * @param {THREE.Scene} scene - Die Spielszene
  * @param {THREE.Camera} kamera - Die Spieler-Kamera
  */
-function initCombat(scene, kamera) {
+export function initCombat(scene, kamera) {
+    strahlScene = scene;
+
+    // 1. Mündungsfeuer (persistent)
+    muzzleFlashLicht = new THREE.PointLight(0xffcc00, 0, 5);
+    scene.add(muzzleFlashLicht);
+
+    const muzzleGeo = new THREE.SphereGeometry(0.12, 4, 4);
+    const muzzleMat = new THREE.MeshBasicMaterial({ color: 0xffff00, transparent: true, opacity: 0 });
+    muzzleFlashMesh = new THREE.Mesh(muzzleGeo, muzzleMat);
+    muzzleFlashMesh.visible = false;
+    scene.add(muzzleFlashMesh);
+
+    // 2. Objekt-Pooling Initialisierung
+    // Wir erstellen die Lichter und Meshes vorab und verstecken sie
+    for (let i = 0; i < LICHT_POOL_GROESSE; i++) {
+        const licht = new THREE.PointLight(0xffaa00, 0, 6);
+        scene.add(licht);
+        lichtPool.push(licht);
+
+        const mesh = new THREE.Mesh(einschlagsGeometrie, materialFunken);
+        mesh.visible = false;
+        scene.add(mesh);
+        einschlagMeshPool.push(mesh);
+    }
+
+    // 3. Laser-Strahl vorab erstellen
+    const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const laserMat = new THREE.LineBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0 });
+    poolLaser = new THREE.Line(laserGeo, laserMat);
+    scene.add(poolLaser);
+
+    console.log('[Kampf] System initialisiert (Pooling aktiv)');
+
+    // 4. Shader Warm-up wird jetzt extern nach dem Maze-Build getriggert
+    // warmupCombat(scene);
+
     // Audio-Kontext und Puffer vorab initialisieren (verhindert Lag beim ersten Schuss)
     try {
         if (!audioCtx) {
@@ -198,11 +241,6 @@ function initCombat(scene, kamera) {
     } catch (e) {
         console.warn('[Audio] Initialisierung verzögert:', e);
     }
-
-    // Muzzle-Flash-Licht erstellen (anfangs unsichtbar)
-    muzzleFlashLicht = new THREE.PointLight(0xffff00, 0, 8);
-    muzzleFlashLicht.position.copy(kamera.position);
-    scene.add(muzzleFlashLicht);
 
     updateMunitionAnzeige();
     console.log('[Kampf] Kampfsystem bereit');
@@ -267,20 +305,8 @@ function schiessen(kamera, scene, aktuelleZeit) {
     wandRaycaster.near = 0.1;
     wandRaycaster.far = SCHUSS_REICHWEITE;
 
-    // Nur gegen Wände und andere statische Szene-Teile (keine Spieler!)
-    const alleWandTreffer = wandRaycaster.intersectObjects(scene.children, true).filter(h => {
-        // Ignoriere Spieler-Meshes anhand der userData
-        let isSpieler = false;
-        let p = h.object;
-        while (p) {
-            if (p.userData && (p.userData.spielerId === 'gegner' || p.userData.istSpieler)) {
-                isSpieler = true;
-                break;
-            }
-            p = p.parent;
-        }
-        return h.object.type !== 'PointLight' && h.object.type !== 'Group' && !isSpieler;
-    });
+    // Nur gegen Wände (wallGroup) raycasten -> Extrem schnell!
+    const alleWandTreffer = wallGroup ? wandRaycaster.intersectObject(wallGroup, true) : [];
 
 
     // Startpunkt: leicht vor der Kamera
@@ -427,43 +453,70 @@ function entferneAlleZiele() {
 }
 
 /**
- * Erzeugt einen leuchtenden Laserstrahl zwischen zwei Punkten.
- * @param {THREE.Scene} scene - Die Spielszene
- * @param {THREE.Vector3} start - Startpunkt (Spielerposition)
- * @param {THREE.Vector3} ende - Endpunkt (Wand/Gegner)
+ * Erzeugt einen leuchtenden Laserstrahl zwischen zwei Punkten (via Pooling).
  */
 function erzeugeStrahl(scene, start, ende) {
-    // Vorherigen Strahl entfernen falls vorhanden
-    entferneStrahl();
+    if (!poolLaser) return;
 
-    // Geometrie: Linie von Start bis Ende
-    const punkte = [start, ende];
-    const geometrie = new THREE.BufferGeometry().setFromPoints(punkte);
+    // Geometrie aktualisieren (ohne neues Object zu erzeugen)
+    const positions = poolLaser.geometry.attributes.position.array;
+    positions[0] = start.x; positions[1] = start.y; positions[2] = start.z;
+    positions[3] = ende.x; positions[4] = ende.y; positions[5] = ende.z;
+    poolLaser.geometry.attributes.position.needsUpdate = true;
 
-    // Leuchtender Strahl mit Farbverlauf (gelb → rot)
-    const material = new THREE.LineBasicMaterial({
-        color: 0xffaa00,
-        linewidth: 2,  // Hinweis: Nur bei manchen GPUs >1 möglich
-        transparent: true,
-        opacity: 1.0
-    });
+    poolLaser.material.opacity = 1.0;
+    poolLaser.material.color.setHex(0xffaa00);
+    poolLaser.visible = true;
 
-    aktuellerStrahl = new THREE.Line(geometrie, material);
     strahlTimer = STRAHL_DAUER;
-    strahlScene = scene;
-    scene.add(aktuellerStrahl);
 }
 
 /**
- * Entfernt den aktuellen Laserstrahl aus der Scene.
+ * Entfernt den aktuellen Laserstrahl (macht ihn unsichtbar).
  */
 function entferneStrahl() {
-    if (aktuellerStrahl && strahlScene) {
-        strahlScene.remove(aktuellerStrahl);
-        aktuellerStrahl.geometry.dispose();
-        aktuellerStrahl.material.dispose();
-        aktuellerStrahl = null;
+    if (poolLaser) {
+        poolLaser.visible = false;
+        poolLaser.material.opacity = 0;
     }
+}
+
+/**
+ * Zwingt die Grafikkarte, die Shader für Schusseffekte vorab zu compilieren.
+ * Muss aufgerufen werden, wenn bereits Geometrie (Wände) in der Scene sind!
+ */
+export function warmupCombat(scene) {
+    if (!scene) return;
+    console.log('[Kampf] Starte Shader-Warmup für Effekte...');
+
+    // Wir machen alles für einen kurzen Moment sichtbar (mit minimaler Intensität)
+    if (poolLaser) {
+        poolLaser.visible = true;
+        poolLaser.material.opacity = 0.01;
+    }
+    if (muzzleFlashMesh) {
+        muzzleFlashMesh.visible = true;
+        muzzleFlashMesh.material.opacity = 0.01;
+    }
+    if (muzzleFlashLicht) {
+        muzzleFlashLicht.intensity = 0.01;
+    }
+
+    lichtPool.forEach(l => l.intensity = 0.01);
+    einschlagMeshPool.forEach(m => {
+        m.visible = true;
+        m.material.opacity = 0.01;
+    });
+
+    // Wir lassen es für 2 Frames aktiv (ca. 32ms), damit der Renderer es sicher sieht
+    setTimeout(() => {
+        if (poolLaser) poolLaser.visible = false;
+        if (muzzleFlashMesh) muzzleFlashMesh.visible = false;
+        if (muzzleFlashLicht) muzzleFlashLicht.intensity = 0;
+        lichtPool.forEach(l => l.intensity = 0);
+        einschlagMeshPool.forEach(m => m.visible = false);
+        console.log('[Kampf] Shader-Warmup abgeschlossen.');
+    }, 100);
 }
 
 // Shared Geometries & Materials für Einschlag-Effekte (Performance)
@@ -472,68 +525,45 @@ const materialBlut = new THREE.MeshBasicMaterial({ color: 0xff0000 });
 const materialFunken = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
 
 /**
- * Erzeugt einen visuellen Einschlag-Effekt am Trefferpunkt.
- * @param {THREE.Scene} scene - Die Spielszene
- * @param {THREE.Vector3} punkt - Trefferpunkt in der Welt
- * @param {THREE.Vector3} normal - (Optional) Normalenvektor der getroffenen Fläche
- * @param {string} typ - 'SPARKS' (Wand) oder 'BLOOD' (Spieler)
- * @param {THREE.Vector3} schuetzenPos - (Optional) Position des Schützen für Licht-Offset
+ * Erzeugt einen visuellen Einschlag-Effekt am Trefferpunkt (via Pooling).
  */
 function erzeugeEinschlag(scene, punkt, normal = null, typ = 'SPARKS', schuetzenPos = null) {
     const isBlood = typ === 'BLOOD';
     const lichtFarbe = isBlood ? 0xff0000 : 0xffaa00;
 
-    // Leuchtender Punkt am Trefferpunkt
-    const material = isBlood ? materialBlut : materialFunken;
-    const einschlag = new THREE.Mesh(einschlagsGeometrie, material);
+    // 1. Mesh aus Pool holen
+    const mesh = einschlagMeshPool.find(m => !m.visible) || einschlagMeshPool[0];
+    mesh.material = isBlood ? materialBlut : materialFunken;
+    mesh.position.copy(punkt);
+    mesh.visible = true;
 
-    // Skalierung statt neuer Geometrie für verschiedene Größen
     const scale = isBlood ? 1.2 : 0.8;
-    einschlag.scale.set(scale, scale, scale);
+    mesh.scale.set(scale, scale, scale);
 
-    einschlag.position.copy(punkt);
-
-
-    // Kleiner Offset für Spieler-Treffer (Richtung Kamera/Ray), falls keine Normale da ist
-    if (!normal) {
-        // Wenn wir keine Normale haben, ziehen wir den Punkt ein Stück zum Schützen her, 
-        // damit er nicht im Mesh flimmert (Z-Fighting) oder in der Wand verschwindet.
-        const refPos = schuetzenPos || (getKamera() ? getKamera().position : null);
-        if (refPos) {
-            const richtungZumSchuetzen = new THREE.Vector3().subVectors(refPos, punkt).normalize();
-            einschlag.position.add(richtungZumSchuetzen.multiplyScalar(0.05));
-        }
-    } else {
-        einschlag.position.add(normal.clone().multiplyScalar(0.02));
-    }
-
-    scene.add(einschlag);
-
-    // Einschlag-Licht
-    const licht = new THREE.PointLight(lichtFarbe, isBlood ? 3 : 5, isBlood ? 4 : 6);
+    // 2. Licht aus Pool holen
+    const licht = lichtPool.find(l => l.intensity === 0) || lichtPool[0];
+    licht.color.setHex(lichtFarbe);
+    licht.intensity = isBlood ? 3 : 5;
+    licht.distance = isBlood ? 4 : 6;
     licht.position.copy(punkt);
 
-    // WICHTIG: Das Licht ein Stück von der Wand wegziehen, 
-    // damit die getroffene Wand auch hell wird!
+    // Offset
     if (normal) {
+        mesh.position.add(normal.clone().multiplyScalar(0.02));
         licht.position.add(normal.clone().multiplyScalar(0.1));
     } else {
-        // Fallback für Netzwerk-Schüsse: Licht zum Schützen ziehen
         const refPos = schuetzenPos || (getKamera() ? getKamera().position : null);
         if (refPos) {
-            const richtungZumSchuetzen = new THREE.Vector3().subVectors(refPos, punkt).normalize();
-            licht.position.add(richtungZumSchuetzen.multiplyScalar(0.12));
+            const dir = new THREE.Vector3().subVectors(refPos, punkt).normalize();
+            mesh.position.add(dir.clone().multiplyScalar(0.05));
+            licht.position.add(dir.multiplyScalar(0.12));
         }
     }
 
-    scene.add(licht);
-
-    // Nach kurzer Zeit entfernen
+    // Nach kurzer Zeit wieder deaktivieren (Pooling)
     setTimeout(() => {
-        scene.remove(einschlag);
-        scene.remove(licht);
-        // Geometrien und Materialien werden geteilt -> NICHT disposen!
-        licht.dispose();
+        mesh.visible = false;
+        licht.intensity = 0;
     }, 300);
 }
 
@@ -557,29 +587,26 @@ function triggereSchussVisuals(scene, start, ende, hitType = 'SPARKS') {
 }
 
 /**
- * Erzeugt einen kurzen 3D-Lichtblitz (Mündungsfeuer) an einer Position.
+ * Erzeugt einen kurzen 3D-Lichtblitz (Mündungsfeuer) an einer Position (via Pooling).
  * @param {THREE.Scene} scene 
  * @param {THREE.Vector3} position 
  */
 function erzeuge3DMuendungsfeuer(scene, position) {
-    // Temporäres Licht für den Blitz
-    const licht = new THREE.PointLight(0xffcc00, 3, 2);
-    licht.position.copy(position);
-    scene.add(licht);
+    if (!muzzleFlashMesh || !muzzleFlashLicht) return;
 
-    // Visueller Kern des Blitzes
-    const geometrie = new THREE.SphereGeometry(0.12, 4, 4);
-    const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-    const blitz = new THREE.Mesh(geometrie, material);
-    blitz.position.copy(position);
-    scene.add(blitz);
+    // Blitz (Mesh)
+    muzzleFlashMesh.position.copy(position);
+    muzzleFlashMesh.visible = true;
+    muzzleFlashMesh.material.opacity = 1;
+
+    // Blitz (Licht)
+    muzzleFlashLicht.position.copy(position);
+    muzzleFlashLicht.intensity = 3;
+    muzzleFlashLicht.distance = 2;
 
     setTimeout(() => {
-        scene.remove(licht);
-        scene.remove(blitz);
-        geometrie.dispose();
-        material.dispose();
-        licht.dispose();
+        muzzleFlashMesh.visible = false;
+        muzzleFlashLicht.intensity = 0;
     }, 60);
 }
 
@@ -598,15 +625,15 @@ function updateCombat(deltaZeit, kamera) {
         }
     }
 
-    // Laserstrahl Logik (deaktiviert)
-    if (aktuellerStrahl) {
+    // Laserstrahl Logik (Pooling)
+    if (poolLaser && poolLaser.visible) {
         strahlTimer -= deltaZeit;
         if (strahlTimer <= 0) {
             entferneStrahl();
         } else {
             // Opacity linear verringern
             const fortschritt = strahlTimer / STRAHL_DAUER;
-            aktuellerStrahl.material.opacity = fortschritt;
+            poolLaser.material.opacity = fortschritt;
         }
     }
 }
@@ -742,7 +769,7 @@ function resetMunition() {
 }
 
 export {
-    initCombat, schiessen, updateCombat, registriereZiel,
+    schiessen, updateCombat, registriereZiel,
     entferneZiel, entferneAlleZiele, empfangeSchaden, healPlayer,
     updateLebenAnzeige, resetLeben, getLeben, addMunition,
     updateMunitionAnzeige, resetMunition, getMunition,

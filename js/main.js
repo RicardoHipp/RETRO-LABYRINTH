@@ -21,12 +21,13 @@ import {
     generiereZufallsSeed,
     istWand,
     addWallLights,
+    updateFackeln,
     WAND_GROESSE,
     WAND_HOEHE
 } from './maze-generator.js';
 import { initInput, getLookDelta, bewegeSpieler, verbrauchSchuss } from './input-handler.js';
-import { initRenderer, updateKameraRotation, getGierWinkel, updateSpielerLicht, prepareRenderer, renderFrame, getKamera, getScene, getRenderer, AUGEN_HOEHE, erzeugePickupModel, entfernePickupModel } from './renderer.js';
-import { initCombat, schiessen, updateCombat, registriereZiel, entferneZiel, entferneAlleZiele, empfangeSchaden, healPlayer, updateLebenAnzeige, resetLeben, addMunition, updateMunitionAnzeige, resetMunition, getMunition, MAX_MUNITION, triggereSchussVisuals, getLeben, MAX_LEBEN } from './combat.js';
+import { initRenderer, updateKameraRotation, getGierWinkel, updateSpielerLicht, prepareRenderer, renderFrame, getKamera, getScene, getRenderer, AUGEN_HOEHE, erzeugePickupModel, entfernePickupModel, initPickupPools } from './renderer.js';
+import { initCombat, warmupCombat, schiessen, updateCombat, registriereZiel, entferneZiel, entferneAlleZiele, empfangeSchaden, healPlayer, updateLebenAnzeige, resetLeben, addMunition, updateMunitionAnzeige, resetMunition, getMunition, MAX_MUNITION, triggereSchussVisuals, getLeben, MAX_LEBEN } from './combat.js';
 import { NetworkManager } from './network-manager.js';
 
 // ── Spiel-Einstellungen ─────────────────────────────────────
@@ -82,6 +83,9 @@ function initSzene() {
     updateLebenAnzeige();
     updateScoreAnzeige();
     uhr = new THREE.Clock();
+    // Pickup Pooling initialisieren
+    initPickupPools(scene);
+
     console.log('[Spiel] Szene initialisiert (wartet auf Labyrinth)');
 }
 
@@ -127,6 +131,9 @@ function starteSpielMitSeed(seed, istHost) {
 
     // Minimap initialisieren
     initMinimap();
+
+    // FINALER WARMUP: Jetzt wo die Welt gebaut ist, Shader für Kampf-Effekte forcieren
+    warmupCombat(scene);
 
     // Lobby ausblenden, Spiel einblenden
     document.getElementById('lobby-screen').style.display = 'none';
@@ -257,7 +264,7 @@ function spawnEinzelnesPickup(typ = 'AMMO', randomFunc = Math.random, vorgabeId 
 
     const model = erzeugePickupModel(typ);
     model.position.set(pos.x, 0.5, pos.z);
-    scene.add(model);
+    // scene.add(model) entfällt, da bereits im Pool-Init geschehen
 
     pickups.push({
         id: id,
@@ -286,7 +293,7 @@ export function spawnNetzwerkPickup(id, pos, typ = 'AMMO') {
 
     const model = erzeugePickupModel(typ);
     model.position.set(pos.x, 0.5, pos.z);
-    scene.add(model);
+    // scene.add(model) entfällt
 
     pickups.push({
         id: id,
@@ -853,9 +860,10 @@ function gameLoop() {
         p = messpunkt("Schiessen", p);
     }
 
-    // ── 4. Kampf-System aktualisieren ───────────────────────
+    // ── 4. Kampf-System & Effekte ───────────────────────
     updateCombat(deltaZeit, kamera);
-    p = messpunkt("Combat-Update", p);
+    updateFackeln(aktuelleZeit);
+    p = messpunkt("Combat/FX-Update", p);
 
     // ── Munition Respawn (nur Host) ──────────────────────────
     if (netzwerk.istHost && rundeAktiv) {
@@ -1025,9 +1033,9 @@ function istMobileGeraet() {
 
 // ── App starten ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('═══════════════════════════════════════════');
-    console.log('  🎮 RETRO-SHOOTER – Spiel wird geladen...');
-    console.log('═══════════════════════════════════════════');
+    console.log("%c ═══════════════════════════════════════════", "color: #ffaa44; font-weight: bold;");
+    console.log("%c    🎮 RETRO-LABYRINTH v1.3.1 - Spiel wird geladen...", "color: #ffaa44; font-weight: bold;");
+    console.log("%c ═══════════════════════════════════════════", "color: #ffaa44; font-weight: bold;");
 
     initLobby();
     gameLoop();

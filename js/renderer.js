@@ -68,10 +68,10 @@ export function initRenderer() {
 
     // ── Szene erstellen ─────────────────────────────────────
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a2e); // Dunkler Hintergrund (Wolfenstein Blau)
+    scene.background = new THREE.Color(0x05050a); // Fast schwarz
 
-    // Nebel für Retro-Atmosphäre
-    scene.fog = new THREE.Fog(0x0a0a15, 1, 20);
+    // Nebel für Horror-Atmosphäre (kürzer = beklemmender)
+    scene.fog = new THREE.Fog(0x05050a, 1, 15);
 
     // ── Kamera erstellen ────────────────────────────────────
     kamera = new THREE.PerspectiveCamera(
@@ -101,7 +101,7 @@ export function initRenderer() {
 
     window.addEventListener('resize', onResize);
 
-    console.log('[Renderer] Three.js v1.1.5 Renderer bereit (Lambert-Update)');
+    console.log('[Renderer] Three.js v1.1.5 Renderer bereit (Phong/Pixel-Lighting active)');
     return { renderer, kamera, scene };
 }
 
@@ -197,62 +197,105 @@ export function getRenderer() {
     return renderer;
 }
 
+// ── Objekt-Pooling für Pickups (Finaler Performance-Fix) ──────────
+const sharedPickupAssets = {
+    AMMO: {
+        geoHuelse: new THREE.CylinderGeometry(0.15, 0.15, 0.4, 8),
+        matHuelse: new THREE.MeshLambertMaterial({ color: 0x444444 }),
+        geoKern: new THREE.CylinderGeometry(0.16, 0.16, 0.2, 8),
+        matKern: new THREE.MeshBasicMaterial({ color: 0x00ffff })
+    },
+    HEALTH: {
+        geoBox: new THREE.BoxGeometry(0.3, 0.3, 0.3),
+        matBox: new THREE.MeshLambertMaterial({ color: 0xff0000 }),
+        geoCross: new THREE.BoxGeometry(0.35, 0.1, 0.1),
+        matCross: new THREE.MeshBasicMaterial({ color: 0xffffff })
+    }
+};
+
+/** @type {Object.<string, THREE.Group[]>} */
+const pickupPool = {
+    AMMO: [],
+    HEALTH: []
+};
+
+let poolsInitialisiert = false;
+
 /**
- * Erzeugt ein 3D-Modell für ein Pickup basierend auf dem Typ.
- * @param {string} typ - Der Typ des Pickups (z.B. 'AMMO', 'HEALTH')
- * @returns {THREE.Group}
+ * Initialisiert die Pools und fügt sie der Scene hinzu (versteckt unter dem Boden).
+ * @param {THREE.Scene} targetScene 
  */
-export function erzeugePickupModel(typ) {
+export function initPickupPools(targetScene) {
+    if (poolsInitialisiert) return;
+    // initSharedPickupAssets(); // Nicht mehr nötig, da direkt definiert
+
+    const poolGroesse = 15; // Ausreichend für Respawns
+
+    ['AMMO', 'HEALTH'].forEach(typ => {
+        for (let i = 0; i < poolGroesse; i++) {
+            const model = erstelleNeuesPickupModel(typ);
+            model.visible = false;
+            model.userData.active = false;
+            model.position.set(0, -10, 0); // Unter der Welt
+            targetScene.add(model);
+            pickupPool[typ].push(model);
+        }
+    });
+
+    poolsInitialisiert = true;
+    console.log('[Renderer] Pickup-Pools initialisiert (30 Objekte, Self-Illuminated, KEINE Lichter)');
+}
+
+/**
+ * Interne Hilfsfunktion zur Erstellung der Geometrie/Materialien (Shared).
+ * @param {string} typ 
+ */
+function erstelleNeuesPickupModel(typ) {
+    const assets = sharedPickupAssets[typ];
     const group = new THREE.Group();
     group.userData.typ = typ;
+    group.userData.imPool = true;
+    group.userData.active = false;
 
-    switch (typ) {
-        case 'AMMO':
-            // Gehäuse (Zylinder)
-            const geoHuelse = new THREE.CylinderGeometry(0.15, 0.15, 0.4, 8);
-            const matHuelse = new THREE.MeshLambertMaterial({ color: 0x444444 });
-            const huelse = new THREE.Mesh(geoHuelse, matHuelse);
-            group.add(huelse);
-
-            // Glühender Kern (innerer Zylinder)
-            const geoKern = new THREE.CylinderGeometry(0.16, 0.16, 0.2, 8);
-            const matKern = new THREE.MeshBasicMaterial({ color: 0x00ffff });
-            const kern = new THREE.Mesh(geoKern, matKern);
-            group.add(kern);
-
-            // Kleines Licht
-            const lichtAmmo = new THREE.PointLight(0x00ffff, 1, 2);
-            lichtAmmo.castShadow = false;
-            group.add(lichtAmmo);
-            break;
-
-        case 'HEALTH':
-            // Rote Box mit weißem Kreuz 
-            const geoBox = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-            const matBox = new THREE.MeshLambertMaterial({ color: 0xff0000 });
-            const box = new THREE.Mesh(geoBox, matBox);
-            group.add(box);
-
-            const geoCross = new THREE.BoxGeometry(0.35, 0.1, 0.1);
-            const matCross = new THREE.MeshBasicMaterial({ color: 0xffffff });
-            const cross1 = new THREE.Mesh(geoCross, matCross);
-            const cross2 = new THREE.Mesh(geoCross, matCross);
-            cross2.rotation.y = Math.PI / 2;
-            group.add(cross1);
-            group.add(cross2);
-
-            const lichtHealth = new THREE.PointLight(0xff0000, 1, 2);
-            lichtHealth.castShadow = false;
-            group.add(lichtHealth);
-            break;
+    if (typ === 'AMMO') {
+        group.add(new THREE.Mesh(assets.geoHuelse, assets.matHuelse));
+        // Der Kern ist MeshBasicMaterial -> leuchtet von selbst
+        group.add(new THREE.Mesh(assets.geoKern, assets.matKern));
+    } else {
+        group.add(new THREE.Mesh(assets.geoBox, assets.matBox));
+        const cross1 = new THREE.Mesh(assets.geoCross, assets.matCross);
+        const cross2 = new THREE.Mesh(assets.geoCross, assets.matCross);
+        cross2.rotation.y = Math.PI / 2;
+        // Kreuze sind MeshBasicMaterial -> leuchten von selbst
+        group.add(cross1);
+        group.add(cross2);
     }
-
-    aktivePickups.push(group);
     return group;
 }
 
 /**
- * Entfernt ein Pickup aus der Animations-Liste.
+ * Holt ein fertiges Pickup-Modell aus dem Pool.
+ * @param {string} typ - 'AMMO' oder 'HEALTH'
+ * @returns {THREE.Group}
+ */
+export function erzeugePickupModel(typ) {
+    if (!poolsInitialisiert) {
+        // initSharedPickupAssets(); // Nicht mehr nötig
+        return erstelleNeuesPickupModel(typ);
+    }
+
+    const model = pickupPool[typ].find(m => !m.userData.active) || pickupPool[typ][0];
+
+    model.userData.active = true;
+    model.visible = true;
+    if (!aktivePickups.includes(model)) {
+        aktivePickups.push(model);
+    }
+    return model;
+}
+
+/**
+ * Legt ein Pickup zurück in den Pool.
  * @param {THREE.Group} model 
  */
 export function entfernePickupModel(model) {
@@ -261,19 +304,9 @@ export function entfernePickupModel(model) {
         aktivePickups.splice(idx, 1);
     }
 
-    // Speicher freigeben (Geometrien und Materialien)
-    model.traverse((obj) => {
-        if (obj.isMesh) {
-            if (obj.geometry) obj.geometry.dispose();
-            if (obj.material) {
-                if (Array.isArray(obj.material)) {
-                    obj.material.forEach(m => m.dispose());
-                } else {
-                    obj.material.dispose();
-                }
-            }
-        }
-    });
+    model.userData.active = false;
+    model.visible = false;
+    model.position.set(0, -10, 0);
 }
 
 /**

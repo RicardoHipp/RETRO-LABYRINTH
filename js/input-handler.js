@@ -11,6 +11,7 @@
  */
 
 import { istWand, WAND_GROESSE } from './maze-generator.js';
+import { resetMunition } from './combat.js';
 
 // ── Eingabe-Zustand ─────────────────────────────────────────
 const tasten = {
@@ -71,6 +72,18 @@ export function initInput(canvas) {
             case 'KeyS': case 'ArrowDown': tasten.zurueck = true; break;
             case 'KeyA': case 'ArrowLeft': tasten.links = true; break;
             case 'KeyD': case 'ArrowRight': tasten.rechts = true; break;
+            case 'KeyT':
+                if (e.shiftKey) {
+                    resetMunition();
+                    console.log('[Cheat] Munition via Shift+T aufgefüllt!');
+                }
+                break;
+            case 'KeyR':
+                autoWalkAktiv = !autoWalkAktiv;
+                autoWalkPhase = 0;
+                autoWalkDistanz = 0;
+                console.log('[Input] Auto-Walk ' + (autoWalkAktiv ? 'AN' : 'AUS'));
+                break;
         }
     });
 
@@ -80,12 +93,6 @@ export function initInput(canvas) {
             case 'KeyS': case 'ArrowDown': tasten.zurueck = false; break;
             case 'KeyA': case 'ArrowLeft': tasten.links = false; break;
             case 'KeyD': case 'ArrowRight': tasten.rechts = false; break;
-            case 'KeyR':
-                autoWalkAktiv = !autoWalkAktiv;
-                autoWalkPhase = 0;
-                autoWalkDistanz = 0;
-                console.log('[Input] Auto-Walk ' + (autoWalkAktiv ? 'AN' : 'AUS'));
-                break;
         }
     });
 
