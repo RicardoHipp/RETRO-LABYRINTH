@@ -22,19 +22,25 @@ import {
     istWand,
     addWallLights,
     updateFackeln,
-    WAND_GROESSE,
-    WAND_HOEHE
+    WAND_HOEHE,
+    WAND_GROESSE
 } from './maze-generator.js';
-import { initInput, getLookDelta, bewegeSpieler, verbrauchSchuss } from './input-handler.js';
-import { initRenderer, updateKameraRotation, getGierWinkel, updateSpielerLicht, prepareRenderer, renderFrame, getKamera, getScene, getRenderer, AUGEN_HOEHE, erzeugePickupModel, entfernePickupModel, initPickupPools } from './renderer.js';
-import { initCombat, warmupCombat, schiessen, updateCombat, registriereZiel, entferneZiel, entferneAlleZiele, empfangeSchaden, healPlayer, updateLebenAnzeige, resetLeben, addMunition, updateMunitionAnzeige, resetMunition, getMunition, MAX_MUNITION, triggereSchussVisuals, getLeben, MAX_LEBEN } from './combat.js';
+import { initInput, getLookDelta, bewegeSpieler, verbrauchSchuss, wurdeMinePlatziert, getMovementVector } from './input-handler.js';
+import { initRenderer, updateKameraRotation, getGierWinkel, updateSpielerLicht, prepareRenderer, renderFrame, getKamera, getScene, getRenderer, AUGEN_HOEHE, erzeugePickupModel, entfernePickupModel, initPickupPools, erzeugeScharfeMineModel } from './renderer.js';
+import { initCombat, warmupCombat, schiessen, updateCombat, registriereZiel, entferneZiel, entferneAlleZiele, empfangeSchaden, healPlayer, updateLebenAnzeige, resetLeben, addMunition, updateMunitionAnzeige, resetMunition, getMunition, MAX_MUNITION, triggereSchussVisuals, getLeben, MAX_LEBEN, addMine, hasMine, nutzeMine, SCHADEN_MINE, setOnTodCallback, getMinen } from './combat.js';
 import { NetworkManager } from './network-manager.js';
 
 // ── Spiel-Einstellungen ─────────────────────────────────────
 const LABYRINTH_BREITE = 8;   // Zellen (Gesamtraster wird 2*8+1 = 17)
 const LABYRINTH_HOEHE = 8;
 const MAX_PICKUPS_ON_GROUND = 8; // Maximal 8 Munitionspacks (40 Schuss) auf dem Boden
+const MAX_TOTAL_MINES_ON_MAP = 4; // Maximal 4 Minen-Pickups gleichzeitig
 const RESPAWN_INTERVAL = 5;      // Alle 5 Sekunden prüfen
+
+// ── Spawn-Wahrscheinlichkeiten (unabhängig voneinander) ──
+const SPAWN_CHANCE_MINE = 1;  // 5%  - Selten, strategisch
+const SPAWN_CHANCE_HEALTH = 0.15;  // 15% - Gelegentlich
+// Wenn keines greift → AMMO (Fallback)
 
 // ── Globaler Spielzustand ───────────────────────────────────
 let labyrinth = null;
@@ -46,7 +52,10 @@ let spielSeed = 0;
 let letzterRespawnZeit = 0;
 let rundeAktiv = true; // false wenn jemand besiegt wurde
 let pickups = []; // Liste der verfügbaren Pickups (früher munitionPickups)
+let aktiveMinen = []; // Liste der scharfen Minen: {id, pos, model, ownerId}
 let neustartTimer = null; // Globaler Timer für Neustart-Countdown
+let minenRadarTimer = 0; // Timer für Minen-Hilfe auf Minimap
+let gegnerMinenInventar = 0; // Minen im Gegner-Inventar (Host zählt mit)
 
 // Radar-Ping System (Gegner auf Minimap)
 let gegnerRadarPos = null;      // Die zuletzt "gepinnte" Position
@@ -99,9 +108,8 @@ function starteSpielMitSeed(seed, istHost) {
     const scene = getScene();
     const kamera = getKamera();
 
-    // Alte Pickups aufräumen
+    // Alte Pickups aufräumen (Pool-Modelle bleiben in der Szene!)
     for (let p of pickups) {
-        scene.remove(p.model);
         entfernePickupModel(p.model);
     }
     pickups = [];
@@ -165,6 +173,10 @@ function starteSpielMitSeed(seed, istHost) {
     netzwerk.pusheAktuellePosition();
 
     spielGestartet = true;
+
+    // Grafik-Status im HUD aktualisieren (Echte Prüfung!)
+    updateGrafikStatus();
+
     console.log('[Spiel] ✅ Spiel gestartet! Ist Host:', istHost);
 }
 
@@ -241,12 +253,16 @@ function spawnInitialPickups(seed) {
         return (random - 1) / 2147483646;
     };
 
-    const anzahl = 6;
+    const anzahl = 8;
     for (let i = 0; i < anzahl; i++) {
-        // Initiale Packs sind immer Munition für den Start
-        spawnEinzelnesPickup('AMMO', seededRandom, `pickup_init_${i}`, false);
+        // Mix aus Items für den Start: 5x Ammo, 2x Health, 1x Mine
+        let typ = 'AMMO';
+        if (i === 5 || i === 6) typ = 'HEALTH';
+        if (i === 7) typ = 'MINE';
+
+        spawnEinzelnesPickup(typ, seededRandom, `pickup_init_${i}`, false);
     }
-    console.log(`[Spiel] ${anzahl} Initial-Pickups gespawnt`);
+    console.log(`[Spiel] ${anzahl} Initial-Pickups gespawnt. Array-Länge: ${pickups.length}`);
 }
 
 /**
@@ -269,6 +285,9 @@ function spawnEinzelnesPickup(typ = 'AMMO', randomFunc = Math.random, vorgabeId 
     const model = erzeugePickupModel(typ);
     model.position.set(pos.x, 0.5, pos.z);
     // scene.add(model) entfällt, da bereits im Pool-Init geschehen
+
+    // DEBUG: Modell-Status prüfen
+    console.log(`[DEBUG Spawn] typ=${typ}, pos=(${pos.x.toFixed(1)}, ${pos.z.toFixed(1)}), visible=${model.visible}, inScene=${!!model.parent}, active=${model.userData.active}`);
 
     pickups.push({
         id: id,
@@ -355,6 +374,8 @@ function wendePickupEffektAn(typ) {
                 return true;
             }
             return false;
+        case 'MINE':
+            return addMine(1); // Gibt true zurück wenn Inventar nicht voll
         default:
             return false;
     }
@@ -368,8 +389,8 @@ export function entfernePickup(id) {
     const idx = pickups.findIndex(p => p.id === id);
     if (idx !== -1) {
         const p = pickups[idx];
-        const scene = getScene();
-        if (scene) scene.remove(p.model);
+        // NICHT scene.remove()! Das Modell bleibt in der Szene (Pool),
+        // wird aber durch entfernePickupModel versteckt (visible=false)
         entfernePickupModel(p.model);
         pickups.splice(idx, 1);
     }
@@ -421,11 +442,36 @@ function initLobby() {
     // Netzwerk-Manager erstellen
     netzwerk = new NetworkManager();
 
+    // ── Fullscreen-Toggle Logik ─────────────────────────────
+    const fsToggle = document.getElementById('fullscreen-toggle');
+    if (fsToggle) {
+        // 1. Klick auf Toggle schaltet direkt um
+        fsToggle.addEventListener('change', () => {
+            if (fsToggle.checked) {
+                requestFullscreen();
+            } else {
+                exitFullscreen();
+            }
+        });
+
+        // 2. Synchronisation bei externen Änderungen (z.B. ESC)
+        document.addEventListener('fullscreenchange', () => {
+            fsToggle.checked = !!document.fullscreenElement;
+        });
+        // Webkit Fallback
+        document.addEventListener('webkitfullscreenchange', () => {
+            fsToggle.checked = !!document.webkitFullscreenElement;
+        });
+    }
+
     // ── Startbildschirm → Lobby ─────────────────────────────
     startButton.addEventListener('click', () => {
         startScreen.style.display = 'none';
         lobbyScreen.style.display = 'flex';
-        requestFullscreen();
+        // Falls Toggle aktiviert, Fullscreen anfordern (falls nicht schon aktiv)
+        if (document.getElementById('fullscreen-toggle').checked) {
+            requestFullscreen();
+        }
     });
 
     // ── Solo-Test (Direkter Start ohne Netzwerk) ────────────
@@ -452,7 +498,10 @@ function initLobby() {
 
             // Spiel direkt starten
             starteSpielMitSeed(spielSeed, true);
-            requestFullscreen();
+            // Falls Toggle aktiviert, Fullscreen anfordern
+            if (document.getElementById('fullscreen-toggle').checked) {
+                requestFullscreen();
+            }
 
             console.log('[Solo] Test-Modus gestartet (Seed: ' + spielSeed + ')');
         });
@@ -625,14 +674,33 @@ function richteNetzwerkCallbacks() {
         }
     });
 
+    // Minen-Aktionen empfangen
+    netzwerk.onMineEvent((typ, daten) => {
+        if (typ === 'mine_placed') {
+            const { id, pos } = daten;
+            // Gegner hat Mine gelegt -> bei uns spawnen (als 'gegner'-Mine)
+            // pos ist ein einfaches Objekt {x,y,z}, wir brauchen Vector3
+            const vecPos = new THREE.Vector3(pos.x, pos.y, pos.z);
+            platziereMine(id, vecPos, 'gegner');
+            gegnerMinenInventar = Math.max(0, gegnerMinenInventar - 1);
+            console.log(`[Netzwerk] Gegner-Mine platziert: ${id}. Gegner-Inventar: ${gegnerMinenInventar}`);
+        } else if (typ === 'mine_exploded') {
+            entferneMine(daten.id, true); // Mit Effekt
+            console.log('[Netzwerk] Mine explodiert:', daten.id);
+        }
+    });
+
+    // Zentraler Tod-Callback: Wird bei JEDEM Schaden automatisch ausgelöst,
+    // egal ob durch Schuss, Mine oder zukünftige Items
+    setOnTodCallback(() => {
+        netzwerk.sende('besiegt', {});
+        zeigeErgebnis('NIEDERLAGE', '💀 Du wurdest besiegt!');
+    });
+
     // Treffer empfangen
     netzwerk.onReceiveHit((daten) => {
-        const restLeben = empfangeSchaden(daten.schaden);
-        if (restLeben <= 0) {
-            // Ich wurde besiegt → Gegner informieren
-            netzwerk.sende('besiegt', {});
-            zeigeErgebnis('NIEDERLAGE', '💀 Du wurdest besiegt!');
-        }
+        empfangeSchaden(daten.schaden);
+        // Tod wird automatisch durch setOnTodCallback behandelt!
     });
 
     netzwerk.onBesiegtEmpfangen = () => {
@@ -642,6 +710,12 @@ function richteNetzwerkCallbacks() {
     // Munition-Pickup Synchronisation
     netzwerk.onPickupCollected = (pickupId) => {
         console.log(`[Netzwerk] Pickup eingesammelt durch Gegner: ${pickupId}`);
+        // Wenn Gegner eine Mine einsammelt -> mitzählen
+        const pickup = pickups.find(p => p.id === pickupId);
+        if (pickup && pickup.typ === 'MINE') {
+            gegnerMinenInventar++;
+            console.log(`[Minen] Gegner hat Mine eingesammelt. Gegner-Inventar: ${gegnerMinenInventar}`);
+        }
         entfernePickup(pickupId);
     };
 
@@ -757,9 +831,8 @@ function starteNeueRunde() {
     // Kampf-Ziele resetten
     entferneAlleZiele();
 
-    // Pickups säubern
+    // Pickups säubern (Pool-Modelle bleiben in der Szene!)
     pickups.forEach(p => {
-        scene.remove(p.model);
         entfernePickupModel(p.model);
     });
     pickups = [];
@@ -799,6 +872,9 @@ function starteNeueRunde() {
     // WICHTIG: Beide bauen das Labyrinth mit dem (neuen) spielSeed auf
     starteSpielMitSeed(spielSeed, netzwerk.istHost);
 
+    // Grafik-Status aktualisieren
+    updateGrafikStatus();
+
     console.log('[Spiel] 🔄 Neue Runde gestartet!');
 }
 
@@ -821,6 +897,12 @@ function gameLoop() {
 
     const deltaZeit = uhr.getDelta();
     const aktuelleZeit = uhr.getElapsedTime();
+
+    // Radar-Timer aktualisieren
+    if (minenRadarTimer > 0) {
+        minenRadarTimer -= deltaZeit;
+    }
+
     const kamera = getKamera();
     const scene = getScene();
 
@@ -872,14 +954,126 @@ function gameLoop() {
     updateFackeln(aktuelleZeit);
     p = messpunkt("Combat/FX-Update", p);
 
+    // ── 4b. Minen-Logik (Platzieren & Auslösen) ──────────
+    // A) Platzieren oder Radar aktivieren
+    if (wurdeMinePlatziert() && rundeAktiv) {
+        if (hasMine()) {
+            const moveVec = getMovementVector();
+            const lookDir = new THREE.Vector3();
+            kamera.getWorldDirection(lookDir);
+            lookDir.y = 0;
+            lookDir.normalize();
+
+            const offset = new THREE.Vector3();
+
+            // Logik: 
+            // Bewegung -> Entgegen der Bewegung
+            // Stand -> In Blickrichtung (Vorne)
+            if (moveVec.vorwaerts !== 0 || moveVec.seitwaerts !== 0) {
+                // Wir bewegen uns -> Offset entgegen der Bewegung berechnen
+                // Bewegung ist relativ zur Kamera!
+                const gier = getGierWinkel();
+                const dx = (-Math.sin(gier) * moveVec.vorwaerts + Math.cos(gier) * moveVec.seitwaerts);
+                const dz = (-Math.cos(gier) * moveVec.vorwaerts - Math.sin(gier) * moveVec.seitwaerts);
+
+                // Entgegen: Negieren
+                offset.set(-dx, 0, -dz).normalize();
+            } else {
+                // Stillstand -> Vorne
+                offset.copy(lookDir);
+            }
+
+            const dropPos = kamera.position.clone().add(offset.multiplyScalar(1.5));
+            dropPos.y = 0.1; // Bodenhöhe
+
+            // Check: Nicht in Wand platzieren
+            if (!istWand(labyrinth, dropPos.x, dropPos.z)) {
+                const mineId = `mine_${netzwerk.spielerId}_${Date.now()}`;
+                platziereMine(mineId, dropPos, netzwerk.spielerId);
+                nutzeMine();
+                netzwerk.sende('mine_placed', { id: mineId, pos: dropPos });
+                console.log('[Spiel] Mine platziert!');
+            } else {
+                console.log('[Spiel] Platzieren fehlgeschlagen: Wand im Weg');
+            }
+        } else {
+            // Keine Mine im Inventar -> Radar aktivieren
+            minenRadarTimer = 3.0; // 3 Sekunden anzeigen
+            const count = pickups.filter(p => p.typ === 'MINE').length;
+            console.log(`[Gameplay] Radar aktiviert! Minen auf Map: ${count}`);
+        }
+    }
+
+    // B) Auslösen & Animation
+    // Rückwärts schleifen für sicheres Entfernen
+    const spielerPos = kamera.position;
+    for (let i = aktiveMinen.length - 1; i >= 0; i--) {
+        const mine = aktiveMinen[i];
+
+        // Blink-Animation des Lichts
+        if (mine.model) {
+            const blinkLight = mine.model.getObjectByName('blinkLight');
+            if (blinkLight) {
+                // 5 Hz Blinken
+                const s = Math.sin(aktuelleZeit * 10);
+                blinkLight.material.color.setHex(s > 0 ? 0xff0000 : 0x550000);
+            }
+        }
+
+        // Trigger-Check (nur wenn Runde aktiv)
+        if (rundeAktiv) {
+            // Nur X/Z Distanz prüfen (Höhe ignorieren!)
+            const dx = spielerPos.x - mine.pos.x;
+            const dz = spielerPos.z - mine.pos.z;
+            const distSq2D = dx * dx + dz * dz;
+
+            // 0.8 Radius -> 0.64 squared
+            if (distSq2D < 0.64) {
+                console.log(`[Spiel] BOOM! Mine ${mine.id} ausgelöst! Dist: ${Math.sqrt(distSq2D).toFixed(2)}`);
+
+                // Schaden an Spieler (Tod wird automatisch durch setOnTodCallback behandelt)
+                empfangeSchaden(SCHADEN_MINE);
+
+                // Entfernen & Effekt
+                entferneMine(mine.id, true);
+                netzwerk.sende('mine_exploded', { id: mine.id });
+            }
+        }
+    }
+
     // ── Munition Respawn (nur Host) ──────────────────────────
+    // DEBUG: Minen-Status (immer sichtbar)
+    if (aktuelleZeit - letzterRespawnZeit > RESPAWN_INTERVAL - 0.1) {
+        const _mp = pickups.filter(p => p.typ === 'MINE').length;
+        const _mi = getMinen();
+        const _ma = aktiveMinen.length;
+        console.log(`[DEBUG Minen] Pickups=${_mp}, Inventar=${_mi}, Ausgelegt=${_ma}, GESAMT=${_mp + _mi + _ma}/${MAX_TOTAL_MINES_ON_MAP} | istHost=${netzwerk?.istHost}, rundeAktiv=${rundeAktiv}`);
+    }
     if (netzwerk.istHost && rundeAktiv) {
         if (aktuelleZeit - letzterRespawnZeit > RESPAWN_INTERVAL) {
             letzterRespawnZeit = aktuelleZeit;
             if (pickups.length < MAX_PICKUPS_ON_GROUND) {
-                // 80% Munition, 20% Heilung
-                const r = Math.random();
-                const typ = r < 0.8 ? 'AMMO' : 'HEALTH';
+                // Pickup-Typ nach Wahrscheinlichkeit wählen
+                let typ = 'AMMO';
+
+                // Gesamtanzahl aller Minen im Spiel:
+                // Pickups auf dem Boden + eigenes Inventar + ausgelegte aktive Minen
+                const minenPickups = pickups.filter(p => p.typ === 'MINE').length;
+                const minenInventar = getMinen();
+                const minenAusgelegt = aktiveMinen.length;
+                const minenGesamt = minenPickups + minenInventar + minenAusgelegt + gegnerMinenInventar;
+
+                console.log(`[Spawn] Minen-Check: Pickups=${minenPickups}, Inventar=${minenInventar}, Gegner=${gegnerMinenInventar}, Ausgelegt=${minenAusgelegt}, GESAMT=${minenGesamt}/${MAX_TOTAL_MINES_ON_MAP}`);
+
+                // Jedes Item hat einen eigenen, unabhängigen Würfel
+                if (Math.random() < SPAWN_CHANCE_MINE && minenGesamt < MAX_TOTAL_MINES_ON_MAP) {
+                    typ = 'MINE';
+                } else if (Math.random() < SPAWN_CHANCE_HEALTH) {
+                    typ = 'HEALTH';
+                }
+                // Sonst bleibt typ = 'AMMO' (Fallback)
+
+                console.log(`[Spawn] → ${typ} gespawnt`);
                 spawnEinzelnesPickup(typ);
             }
         }
@@ -1026,6 +1220,22 @@ function zeichneMinimap(kamera) {
             }
         }
     }
+    // --- Minen-Radar: Zeige Minen-Pickups auf der Map ---
+    if (minenRadarTimer > 0) {
+        pickups.forEach(p => {
+            if (p.typ === 'MINE') {
+                const pX = (p.pos.x / WAND_GROESSE + 0.5);
+                const pZ = (p.pos.z / WAND_GROESSE + 0.5);
+
+                const alpha = Math.min(1.0, minenRadarTimer);
+                ctx.fillStyle = `rgba(255, 0, 0, ${alpha})`;
+
+                ctx.beginPath();
+                ctx.arc(pX * z, pZ * z, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        });
+    }
 }
 
 /**
@@ -1039,6 +1249,153 @@ function istMobileGeraet() {
 }
 
 // ── App starten ─────────────────────────────────────────────
+/**
+ * Prüft das tatsächlich verwendete Material im Renderer und aktualisiert das HUD.
+ * Dient zur Verifikation des Performance-Modus.
+ */
+function updateGrafikStatus() {
+    const statusEl = document.getElementById('grafik-status');
+    const scene = getScene();
+    if (!statusEl || !scene) return;
+
+    // Wir suchen das "wallGroup" Objekt
+    const wallGroup = scene.getObjectByName('wallGroup');
+    let modus = 'UNKNOWN';
+    let farbe = '#aaa';
+
+    if (wallGroup && wallGroup.children.length > 0) {
+        // Wir nehmen das erste Mesh (Wand) und prüfen das Material
+        const mesh = wallGroup.children[0];
+        if (mesh.material) {
+            // Bei InstancedMesh kann material auch ein Array sein, wir prüfen den Typ
+            const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+
+            if (mat.type === 'MeshLambertMaterial') {
+                modus = 'GFX: PERF'; // Performance (Lambert)
+                farbe = '#44ff44';   // Grün
+            } else if (mat.type === 'MeshPhongMaterial') {
+                modus = 'GFX: HIGH'; // High Quality (Phong)
+                farbe = '#ffaa44';   // Orange
+            } else {
+                modus = `GFX: ${mat.type}`;
+            }
+        }
+    }
+
+    statusEl.textContent = modus;
+    statusEl.style.color = farbe;
+    console.log(`[Grafik] Aktiver Modus verifiziert: ${modus}`);
+}
+
+/**
+ * Platziert eine Mine in der Welt.
+ */
+function platziereMine(id, pos, ownerId) {
+    const scene = getScene();
+    if (!scene) return;
+
+    const model = erzeugeScharfeMineModel();
+    model.position.copy(pos);
+    model.userData.id = id;
+    model.userData.ownerId = ownerId;
+    scene.add(model);
+
+    aktiveMinen.push({
+        id: id,
+        pos: pos,
+        model: model,
+        ownerId: ownerId
+    });
+}
+
+/**
+ * Entfernt eine Mine (mit optionalem Effekt).
+ */
+function entferneMine(id, visualEffect = false) {
+    const idx = aktiveMinen.findIndex(m => m.id === id);
+    if (idx !== -1) {
+        const mine = aktiveMinen[idx];
+        const scene = getScene();
+
+        if (scene) scene.remove(mine.model);
+
+        // Cleanup Geometry/Material nicht zwingend nötig bei wenigen Objekten, aber sauberer
+        // Hier lassen wir es erstmal, da Three.js das bei Mesh-Removal nicht automatisch macht
+
+        if (visualEffect) {
+            triggereExplosionseffekt(mine.pos);
+        }
+
+        aktiveMinen.splice(idx, 1);
+        console.log(`[Spiel] Mine ${id} entfernt.`);
+    }
+}
+
+/**
+ * Erzeugt einen Explosionseffekt.
+ */
+function triggereExplosionseffekt(pos) {
+    const scene = getScene();
+    if (!scene) return;
+
+    // Wir nutzen das existierende Partikel-System-Pooling von Combat via "triggereSchussVisuals"?
+    // Nein, das ist für Vector-Start-Ende gedacht.
+    // Wir bauen einen einfachen eigenen Effekt oder nutzen erzeugeEinschlag mehrfach.
+
+    // Einfacher Hack: Mehrere Funken-Einschläge simulieren
+    for (let i = 0; i < 5; i++) {
+        const offset = new THREE.Vector3(
+            (Math.random() - 0.5) * 0.5,
+            (Math.random()) * 0.5,
+            (Math.random() - 0.5) * 0.5
+        );
+        // Wir tricksen und rufen die Combat-Funktion via eines "virtuellen" Schusses auf, 
+        // oder besser: Wir brauchen Zugriff auf erzeugeEinschlag in Combat, aber das ist privat.
+        // Alternative: Wir nutzen einen Sound und lassen es gut sein :D 
+
+        // Doch, triggereSchussVisuals ist exportiert!
+        // Wir faken einen Schuss von oben nach unten auf die Mine
+        const start = pos.clone().add(offset).add(new THREE.Vector3(0, 1, 0));
+        triggereSchussVisuals(scene, start, pos.clone().add(offset), 'BLOOD'); // BLOOD = Rot/Groß
+    }
+}
+
+/**
+ * Versucht die Anwendung in den Fullscreen-Modus zu versetzen.
+ * Muss durch ein User-Event (Click) getriggert werden.
+ */
+function requestFullscreen() {
+    try {
+        const de = document.documentElement;
+        if (de.requestFullscreen) {
+            de.requestFullscreen();
+        } else if (de.webkitRequestFullscreen) {
+            de.webkitRequestFullscreen(); // Safari / iOS Chrome
+        } else if (de.msRequestFullscreen) {
+            de.msRequestFullscreen(); // IE/Edge
+        }
+    } catch (err) {
+        console.warn("[Fullscreen] Fehlgeschlagen oder nicht unterstützt:", err);
+    }
+}
+
+/**
+ * Verlässt den Fullscreen-Modus.
+ */
+function exitFullscreen() {
+    try {
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+        } else if (document.msExitFullscreen) {
+            document.msExitFullscreen();
+        }
+    } catch (err) {
+        console.warn("[Fullscreen] Exit fehlgeschlagen:", err);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     console.log("%c ═══════════════════════════════════════════", "color: #ffaa44; font-weight: bold;");
     console.log("%c    🎮 RETRO-LABYRINTH v1.3.1 - Spiel wird geladen...", "color: #ffaa44; font-weight: bold;");

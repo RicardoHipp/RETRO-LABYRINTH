@@ -210,13 +210,20 @@ const sharedPickupAssets = {
         matBox: new THREE.MeshLambertMaterial({ color: 0xff0000 }),
         geoCross: new THREE.BoxGeometry(0.35, 0.1, 0.1),
         matCross: new THREE.MeshBasicMaterial({ color: 0xffffff })
+    },
+    MINE: {
+        geoBody: new THREE.CylinderGeometry(0.25, 0.3, 0.1, 8),
+        matBody: new THREE.MeshLambertMaterial({ color: 0x222222 }),
+        geoLight: new THREE.SphereGeometry(0.08, 6, 6),
+        matLight: new THREE.MeshBasicMaterial({ color: 0xff0000 }) // Blinkt später via Code?
     }
 };
 
 /** @type {Object.<string, THREE.Group[]>} */
 const pickupPool = {
     AMMO: [],
-    HEALTH: []
+    HEALTH: [],
+    MINE: []
 };
 
 let poolsInitialisiert = false;
@@ -231,7 +238,8 @@ export function initPickupPools(targetScene) {
 
     const poolGroesse = 15; // Ausreichend für Respawns
 
-    ['AMMO', 'HEALTH'].forEach(typ => {
+    // MINE zum Pool hinzufügen
+    ['AMMO', 'HEALTH', 'MINE'].forEach(typ => {
         for (let i = 0; i < poolGroesse; i++) {
             const model = erstelleNeuesPickupModel(typ);
             model.visible = false;
@@ -258,19 +266,25 @@ function erstelleNeuesPickupModel(typ) {
     group.userData.imPool = true;
     group.userData.active = false;
 
-    if (typ === 'AMMO') {
+    if (typ === 'MINE') {
+        const body = new THREE.Mesh(assets.geoBody, assets.matBody);
+        const light = new THREE.Mesh(assets.geoLight, assets.matLight);
+        light.position.y = 0.1;
+        group.add(body);
+        group.add(light);
+    } else if (typ === 'AMMO') {
         group.add(new THREE.Mesh(assets.geoHuelse, assets.matHuelse));
-        // Der Kern ist MeshBasicMaterial -> leuchtet von selbst
         group.add(new THREE.Mesh(assets.geoKern, assets.matKern));
     } else {
+        // Default: HEALTH
         group.add(new THREE.Mesh(assets.geoBox, assets.matBox));
         const cross1 = new THREE.Mesh(assets.geoCross, assets.matCross);
         const cross2 = new THREE.Mesh(assets.geoCross, assets.matCross);
         cross2.rotation.y = Math.PI / 2;
-        // Kreuze sind MeshBasicMaterial -> leuchten von selbst
         group.add(cross1);
         group.add(cross2);
     }
+
     return group;
 }
 
@@ -289,6 +303,7 @@ export function erzeugePickupModel(typ) {
 
     model.userData.active = true;
     model.visible = true;
+    console.log(`[Renderer] Pickup aus Pool geholt: ${typ}, Active: true`);
     if (!aktivePickups.includes(model)) {
         aktivePickups.push(model);
     }
@@ -320,3 +335,25 @@ function onResize() {
 }
 
 export { AUGEN_HOEHE, aktivePickups };
+
+/**
+ * Erstellt ein Modell für eine platzierte (scharfe) Mine.
+ * (Kein Pool, da wenige gleichzeitig existieren).
+ */
+export function erzeugeScharfeMineModel() {
+    const assets = sharedPickupAssets.MINE;
+    const group = new THREE.Group();
+
+    const body = new THREE.Mesh(assets.geoBody, assets.matBody);
+    const light = new THREE.Mesh(assets.geoLight, assets.matLight.clone()); // Clone, damit wir blinken können
+    light.position.y = 0.1;
+    light.name = 'blinkLight'; // Für Animation
+
+    group.add(body);
+    group.add(light);
+
+    // Kleiner als das Pickup
+    group.scale.set(0.8, 0.8, 0.8);
+
+    return group;
+}

@@ -70,6 +70,9 @@ export class NetworkManager {
         /** @type {function|null} Callback für gegnerische Schüsse */
         this.onSchussEmpfangen = null;
 
+        // Minen-Callbacks
+        this.onMinenAktion = null; // {typ: 'placed'|'exploded', daten}
+
         // Timer für regelmäßige Positions-Updates
         this._positionsTimer = null;
         this._letztePosition = null;
@@ -213,6 +216,18 @@ export class NetworkManager {
             case 'schuss':
                 if (this.onSchussEmpfangen) {
                     this.onSchussEmpfangen(nachricht.daten.start, nachricht.daten.ende, nachricht.daten.hitType);
+                }
+                break;
+
+            case 'mine_placed':
+                if (this.onMinenAktion) {
+                    this.onMinenAktion('mine_placed', nachricht.daten);
+                }
+                break;
+
+            case 'mine_exploded':
+                if (this.onMinenAktion) {
+                    this.onMinenAktion('mine_exploded', nachricht.daten);
                 }
                 break;
 
@@ -460,6 +475,13 @@ export class NetworkManager {
      */
     onReceiveHit(callback) {
         this.onTrefferEmpfangen = callback;
+    }
+
+    /**
+     * Registriert Callback für Minen-Events.
+     */
+    onMineEvent(callback) {
+        this.onMinenAktion = callback;
     }
 
     /**

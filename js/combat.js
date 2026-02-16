@@ -31,6 +31,9 @@ let muzzleFlashTimer = 0;
 let muzzleFlashLicht = null;
 let leben = MAX_LEBEN;
 let munition = 10;
+let minen = 0; // Start mit 0 Minen
+const MAX_MINEN_INVENTORY = 2;
+const SCHADEN_MINE = 50;
 
 // Laserstrahl-Zustand
 let strahlTimer = 0;             // Verbleibende Sichtbarkeit
@@ -657,8 +660,21 @@ function updateCombat(deltaZeit, kamera) {
     }
 }
 
+/** @type {function|null} Callback der bei Tod aufgerufen wird */
+let onTodCallback = null;
+
+/**
+ * Registriert einen Callback der automatisch aufgerufen wird,
+ * wenn der Spieler durch irgendeinen Schaden auf 0 Leben fällt.
+ * @param {function} callback - Wird aufgerufen bei Tod
+ */
+function setOnTodCallback(callback) {
+    onTodCallback = callback;
+}
+
 /**
  * Wendet Schaden auf den lokalen Spieler an.
+ * Löst automatisch den Tod-Callback aus, wenn Leben <= 0.
  * @param {number} schaden - Schadenspunkte
  * @returns {number} Verbleibende Lebenspunkte
  */
@@ -682,7 +698,9 @@ function empfangeSchaden(schaden) {
 
     if (leben <= 0) {
         console.log('[Kampf] SPIELER BESIEGT!');
-        // Hier könnte ein Respawn ausgelöst werden
+        if (onTodCallback) {
+            onTodCallback();
+        }
     }
 
     return leben;
@@ -745,6 +763,59 @@ function getMunition() {
 }
 
 /**
+ * Gibt die aktuelle Minen-Anzahl zurück.
+ * @returns {number}
+ */
+function getMinen() {
+    return minen;
+}
+
+/**
+ * Prüft, ob der Spieler eine Mine hat.
+ */
+function hasMine() {
+    return minen > 0;
+}
+
+/**
+ * Fügt Minen zum Inventar hinzu.
+ * @param {number} menge
+ * @param {boolean} mitSound
+ * @returns {boolean} true wenn erfolgreich hinzugefügt
+ */
+function addMine(menge = 1, mitSound = true) {
+    if (minen >= MAX_MINEN_INVENTORY) return false;
+
+    minen = Math.min(MAX_MINEN_INVENTORY, minen + menge);
+    updateMinenAnzeige();
+    if (mitSound) spielePickupSound(); // Evtl. eigener Sound? Erstmal Pickup.
+    return true;
+}
+
+/**
+ * Verbraucht eine Mine aus dem Inventar.
+ */
+function nutzeMine() {
+    if (minen > 0) {
+        minen--;
+        updateMinenAnzeige();
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Aktualisiert die Minen-Anzeige im HUD.
+ */
+function updateMinenAnzeige() {
+    const minenElement = document.getElementById('minen-wert');
+    if (minenElement) {
+        minenElement.textContent = minen;
+        minenElement.style.color = minen > 0 ? '#ff4444' : '#555';
+    }
+}
+
+/**
  * Erhöht die Munition (z.B. Pickup).
  * @param {number} menge - Anzahl der Schüsse
  * @param {boolean} mitSound - Ob der Pickup-Sound abgespielt werden soll
@@ -792,5 +863,6 @@ export {
     entferneZiel, entferneAlleZiele, empfangeSchaden, healPlayer,
     updateLebenAnzeige, resetLeben, getLeben, addMunition,
     updateMunitionAnzeige, resetMunition, getMunition,
-    triggereSchussVisuals
+    getMinen, hasMine, addMine, nutzeMine, SCHADEN_MINE,
+    triggereSchussVisuals, setOnTodCallback
 };

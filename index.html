@@ -87,6 +87,14 @@
             <div class="einstellungs-hinweis">(Einfaches Licht, mehr FPS)</div>
         </div>
 
+        <!-- Fullscreen-Umschalter -->
+        <div class="grafik-einstellungen" style="margin-top: 0.5rem;">
+            <label class="switch-container">
+                <input type="checkbox" id="fullscreen-toggle">
+                <span class="switch-label">⛶ VOLLBILD-MODUS</span>
+            </label>
+        </div>
+
         <div id="version-display" class="version-tag">---</div>
     </div>
 
@@ -141,6 +149,7 @@
         <!-- Score-Anzeige (oben zentral) -->
         <div class="score-container">
             <span id="role-indicator" class="role-text">LOBBY</span>
+            <span id="grafik-status" class="grafik-text">GFX: ???</span>
             <span id="score-eigen">0</span>
             <span class="score-separator">:</span>
             <span id="score-gegner">0</span>
@@ -156,6 +165,8 @@
         <div class="status-container">
             <span class="label">🔋</span>
             <span id="ammo-wert">10</span>
+            <span class="label" style="margin-left: 15px;">💣</span>
+            <span id="minen-wert">0</span>
         </div>
     </div>
 

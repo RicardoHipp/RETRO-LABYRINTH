@@ -18,7 +18,8 @@ const tasten = {
     vorwaerts: false,   // W
     zurueck: false,     // S
     links: false,       // A
-    rechts: false       // D
+    rechts: false,      // D
+    mineLegen: false    // X
 };
 
 // Mausbewegung (wird pro Frame gelesen und zurückgesetzt)
@@ -72,6 +73,7 @@ export function initInput(canvas) {
             case 'KeyS': case 'ArrowDown': tasten.zurueck = true; break;
             case 'KeyA': case 'ArrowLeft': tasten.links = true; break;
             case 'KeyD': case 'ArrowRight': tasten.rechts = true; break;
+            case 'KeyX': tasten.mineLegen = true; break;
             case 'KeyT':
                 if (e.shiftKey) {
                     resetMunition();
@@ -93,6 +95,7 @@ export function initInput(canvas) {
             case 'KeyS': case 'ArrowDown': tasten.zurueck = false; break;
             case 'KeyA': case 'ArrowLeft': tasten.links = false; break;
             case 'KeyD': case 'ArrowRight': tasten.rechts = false; break;
+            case 'KeyX': tasten.mineLegen = false; break;
         }
     });
 
@@ -366,6 +369,17 @@ export function verbrauchSchuss() {
     const schuss = schussAngefordert;
     schussAngefordert = false;
     return schuss;
+}
+
+/**
+ * Prüft ob Mine gelegt werden soll.
+ */
+export function wurdeMinePlatziert() {
+    if (tasten.mineLegen) {
+        tasten.mineLegen = false; // Reset (nur einmal pro Druck)
+        return true;
+    }
+    return false;
 }
 
 /**
