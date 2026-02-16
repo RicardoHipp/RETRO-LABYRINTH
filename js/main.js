@@ -106,9 +106,9 @@ function starteSpielMitSeed(seed, istHost) {
     }
     pickups = [];
 
-    // Labyrinth generieren (gleicher Seed = gleiches Labyrinth)
+    const useLambert = document.getElementById('high-perf-mode')?.checked || false;
     labyrinth = generateMaze(LABYRINTH_BREITE, LABYRINTH_HOEHE, seed);
-    buildMazeGeometry(scene, labyrinth);
+    buildMazeGeometry(scene, labyrinth, useLambert);
 
     // Wandbeleuchtung hinzufügen
     addWallLights(scene, labyrinth);
@@ -425,6 +425,7 @@ function initLobby() {
     startButton.addEventListener('click', () => {
         startScreen.style.display = 'none';
         lobbyScreen.style.display = 'flex';
+        requestFullscreen();
     });
 
     // ── Solo-Test (Direkter Start ohne Netzwerk) ────────────
@@ -451,6 +452,7 @@ function initLobby() {
 
             // Spiel direkt starten
             starteSpielMitSeed(spielSeed, true);
+            requestFullscreen();
 
             console.log('[Solo] Test-Modus gestartet (Seed: ' + spielSeed + ')');
         });
@@ -750,6 +752,7 @@ function starteNeueRunde() {
 
     // Renderer/Szene zurücksetzen (Singleton kümmert sich um Cleanup)
     const { scene, kamera } = initRenderer();
+    const useLambert = document.getElementById('high-perf-mode')?.checked || false;
 
     // Kampf-Ziele resetten
     entferneAlleZiele();
@@ -1043,4 +1046,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     initLobby();
     gameLoop();
+
+    // PWA Service Worker registrieren
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js')
+            .then(reg => console.log('[PWA] Service Worker registriert', reg))
+            .catch(err => console.warn('[PWA] SW Fehler', err));
+    }
 });

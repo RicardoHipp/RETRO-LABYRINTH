@@ -1,0 +1,25 @@
+{
+  "name": "Retro Labyrinth 3D",
+  "short_name": "RetroLab",
+  "description": "Retro 3D Multiplayer Shooter",
+  "start_url": ".",
+  "scope": ".",
+  "display": "fullscreen",
+  "background_color": "#0a0a15",
+  "theme_color": "#ff4444",
+  "orientation": "landscape",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

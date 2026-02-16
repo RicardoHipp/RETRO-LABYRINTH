@@ -4,7 +4,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="description" content="Retro 3D Multiplayer Shooter im Browser – Wolfenstein-Stil mit Three.js">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="icon-192.png">
 
     <!-- Cache-Busting Meta Tags -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -73,6 +77,16 @@
             <span>KLICK</span> Schießen<br>
             <span>ESC</span> Maus freigeben
         </div>
+
+        <!-- Grafik-Umschalter -->
+        <div class="grafik-einstellungen">
+            <label class="switch-container">
+                <input type="checkbox" id="high-perf-mode">
+                <span class="switch-label">🚀 PERFORMANCE-MODUS</span>
+            </label>
+            <div class="einstellungs-hinweis">(Einfaches Licht, mehr FPS)</div>
+        </div>
+
         <div id="version-display" class="version-tag">---</div>
     </div>
 

@@ -57,9 +57,10 @@ export function generiereZufallsSeed() {
  * @param {number} anzahl - Wie viele Varianten erstellt werden sollen
  * @returns {THREE.MeshPhongMaterial[]}
  */
-function generiereWandMaterialPool(anzahl = 4) {
+function generiereWandMaterialPool(anzahl = 4, useLambert = false) {
     const pool = [];
     const res = 256;
+    const MaterialClass = useLambert ? THREE.MeshLambertMaterial : THREE.MeshPhongMaterial;
     for (let p = 0; p < anzahl; p++) {
         const canvas = document.createElement('canvas');
         canvas.width = res;
@@ -151,9 +152,9 @@ function generiereWandMaterialPool(anzahl = 4) {
         textur.wrapT = THREE.RepeatWrapping;
         textur.magFilter = THREE.NearestFilter;
         textur.minFilter = THREE.NearestFilter;
-        pool.push(new THREE.MeshPhongMaterial({
+        pool.push(new MaterialClass({
             map: textur,
-            shininess: 5 // Ganz leichtes Glänzen für Stein-Optik
+            shininess: useLambert ? 0 : 5 // Ganz leichtes Glänzen für Stein-Optik
         }));
     }
     return pool;
@@ -165,9 +166,10 @@ function generiereWandMaterialPool(anzahl = 4) {
  * @param {number} anzahl - Wie viele Varianten
  * @returns {THREE.MeshPhongMaterial[]}
  */
-function generiereBodenMaterialPool(anzahl = 4) {
+function generiereBodenMaterialPool(anzahl = 4, useLambert = false) {
     const pool = [];
     const res = 512; // Höhere Auflösung für Details
+    const MaterialClass = useLambert ? THREE.MeshLambertMaterial : THREE.MeshPhongMaterial;
     for (let p = 0; p < anzahl; p++) {
         const canvas = document.createElement('canvas');
         canvas.width = res;
@@ -240,10 +242,10 @@ function generiereBodenMaterialPool(anzahl = 4) {
         textur.magFilter = THREE.NearestFilter;
         textur.minFilter = THREE.LinearMipmapLinearFilter; // Besseres Mipmapping für Boden
 
-        pool.push(new THREE.MeshPhongMaterial({
+        pool.push(new MaterialClass({
             map: textur,
-            shininess: 15, // Etwas feucht
-            bumpMap: textur, // Textur auch als Bump-Map nutzen für Tiefe
+            shininess: useLambert ? 0 : 15, // Etwas feucht
+            bumpMap: useLambert ? null : textur, // Textur auch als Bump-Map nutzen für Tiefe
             bumpScale: 0.05
         }));
     }
@@ -255,9 +257,10 @@ function generiereBodenMaterialPool(anzahl = 4) {
  * @param {number} anzahl - Wie viele Varianten
  * @returns {THREE.MeshPhongMaterial[]}
  */
-function generiereDeckenMaterialPool(anzahl = 4) {
+function generiereDeckenMaterialPool(anzahl = 4, useLambert = false) {
     const pool = [];
     const res = 256;
+    const MaterialClass = useLambert ? THREE.MeshLambertMaterial : THREE.MeshPhongMaterial;
     for (let p = 0; p < anzahl; p++) {
         const canvas = document.createElement('canvas');
         canvas.width = res;
@@ -310,9 +313,9 @@ function generiereDeckenMaterialPool(anzahl = 4) {
         textur.repeat.set(4, 4);
         textur.magFilter = THREE.NearestFilter;
         textur.minFilter = THREE.NearestFilter;
-        pool.push(new THREE.MeshPhongMaterial({
+        pool.push(new MaterialClass({
             map: textur,
-            shininess: 2
+            shininess: useLambert ? 0 : 2
         }));
     }
     return pool;
@@ -477,9 +480,9 @@ export function istWand(labyrinth, weltX, weltZ) {
  * @param {THREE.Scene} scene - Die Three.js Scene
  * @param {number[][]} labyrinth - Das Labyrinth-Array
  */
-export function buildMazeGeometry(scene, labyrinth) {
-    const wandPool = generiereWandMaterialPool(4);
-    const bodenPool = generiereBodenMaterialPool(4);
+export function buildMazeGeometry(scene, labyrinth, useLambert = false) {
+    const wandPool = generiereWandMaterialPool(4, useLambert);
+    const bodenPool = generiereBodenMaterialPool(4, useLambert);
 
     // Wand-Materialien für Gewölbe clonen (BackSide nötig, da wir von innen schauen)
     const gewoelbePool = wandPool.map(mat => {
